@@ -70,6 +70,29 @@
 
     #driveHint { position: absolute; top: 66px; left: 50%; transform: translateX(-50%); z-index: 8; padding: 8px 14px; border-radius: 999px; color: rgba(230,242,251,.75); background: rgba(5,10,16,.55); border: 1px solid rgba(255,255,255,.13); font-size: 11px; letter-spacing: .04em; transition: opacity .5s; }
     #driveHint.hidden { opacity: 0; }
+    #touchControls {
+      position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 28;
+      display: none; align-items: end; justify-content: space-between; pointer-events: none;
+    }
+    body.mobile-device #touchControls { display: flex; }
+    .touch-dpad {
+      display: grid; grid-template-columns: repeat(3, 56px); grid-template-rows: repeat(3, 56px);
+      gap: 7px; pointer-events: auto;
+    }
+    .touch-actions { display: grid; gap: 8px; pointer-events: auto; }
+    .touch-btn {
+      border: 1px solid rgba(148,181,210,.45); border-radius: 11px;
+      background: rgba(6,12,19,.84); color: var(--ink);
+      font: 800 12px/1 ui-monospace, monospace; letter-spacing: .06em;
+      touch-action: none; user-select: none;
+      min-width: 56px; min-height: 56px;
+    }
+    .touch-btn.action { min-width: 102px; min-height: 52px; font-size: 10px; }
+    .touch-btn.active { background: rgba(99,221,208,.34); border-color: var(--cyan-2); box-shadow: 0 0 0 1px rgba(99,221,208,.22) inset; }
+    .touch-btn[data-touch-hold="w"] { grid-column: 2; grid-row: 1; }
+    .touch-btn[data-touch-hold="a"] { grid-column: 1; grid-row: 2; }
+    .touch-btn[data-touch-hold="s"] { grid-column: 2; grid-row: 2; }
+    .touch-btn[data-touch-hold="d"] { grid-column: 3; grid-row: 2; }
 
     #toast { position: absolute; z-index: 50; top: 78px; left: 50%; transform: translate(-50%, -12px); min-width: 260px; max-width: min(560px, 86vw); padding: 11px 16px; border-radius: 10px; text-align: center; opacity: 0; pointer-events: none; transition: .25s ease; }
     #toast.show { opacity: 1; transform: translate(-50%, 0); }
@@ -203,6 +226,10 @@
       #topbar > .top-cluster:first-child { flex-wrap: wrap; max-width: 162px; }
       #topbar > .top-cluster:last-child { flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 202px; }
       #topbar .btn.ghost { padding: 6px 7px; border-radius: 7px; font-size: 8px; letter-spacing: .03em; }
+      #touchControls { left: 8px; right: 8px; bottom: 8px; }
+      .touch-dpad { grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 50px); gap: 6px; }
+      .touch-btn { min-width: 50px; min-height: 50px; border-radius: 10px; font-size: 11px; }
+      .touch-btn.action { min-width: 92px; min-height: 46px; font-size: 9px; }
       #gamepadBtn { display: none; }
       #scoreCard { display: none; }
       #centerStack { display: none; }
@@ -235,6 +262,18 @@
     </div>
 
     <div id="driveHint">W accelerate · S brake · A/D steer · ↑ LCA · ↓ ACC</div>
+    <div id="touchControls" aria-label="Touch driving controls" hidden>
+      <div class="touch-dpad">
+        <button class="touch-btn" data-touch-hold="w" type="button" aria-label="Accelerate">W</button>
+        <button class="touch-btn" data-touch-hold="a" type="button" aria-label="Steer left">A</button>
+        <button class="touch-btn" data-touch-hold="s" type="button" aria-label="Brake">S</button>
+        <button class="touch-btn" data-touch-hold="d" type="button" aria-label="Steer right">D</button>
+      </div>
+      <div class="touch-actions">
+        <button class="touch-btn action" data-touch-tap="arrowup" type="button" aria-label="Toggle lane centering assist">LCA ↑</button>
+        <button class="touch-btn action" data-touch-tap="arrowdown" type="button" aria-label="Toggle adaptive cruise control">ACC ↓</button>
+      </div>
+    </div>
     <div id="toast" class="glass micro"></div>
 
     <aside id="modPanel" class="glass" aria-label="Moderator dashboard">
@@ -366,6 +405,19 @@
     };
     const deepCopy = value => JSON.parse(JSON.stringify(value));
     const $ = id => document.getElementById(id);
+    const IS_MOBILE_DEVICE = (() => {
+      const ua = navigator.userAgent || "";
+      const mobileUA = /Android|iPhone|iPad|iPod|Windows Phone|Mobile/i.test(ua);
+      const coarsePointer = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+      const hasTouch = navigator.maxTouchPoints > 0;
+      const compactViewport = Math.min(window.innerWidth || 0, window.innerHeight || 0) <= 1000;
+      return mobileUA || (coarsePointer && hasTouch && compactViewport);
+    })();
+    if (IS_MOBILE_DEVICE) {
+      document.body.classList.add("mobile-device");
+      $("touchControls").hidden = false;
+      $("driveHint").textContent = "Touch: hold W/A/S/D · tap LCA/ACC";
+    }
     const hash01 = n => {
       const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
       return x - Math.floor(x);
@@ -1602,14 +1654,35 @@
           this.keys.add(normalized);
           if (this.sim.inputSource === "local" && !event.repeat && normalized === "arrowup") this.sim.toggleLCA();
           if (this.sim.inputSource === "local" && !event.repeat && normalized === "arrowdown") this.sim.toggleACC();
-          $("driveHint").classList.add("hidden");
-          if (this.audio.ctx && this.audio.ctx.state === "suspended" && this.audio.enabled) this.audio.ctx.resume();
+          this.noteLocalInteraction();
         }, { passive: false });
         window.addEventListener("keyup", event => {
           if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) event.preventDefault();
           this.keys.delete(normalizeKey(event));
         }, { passive: false });
         window.addEventListener("blur", () => this.keys.clear());
+      }
+      noteLocalInteraction() {
+        $("driveHint").classList.add("hidden");
+        if (this.audio.ctx && this.audio.ctx.state === "suspended" && this.audio.enabled) this.audio.ctx.resume();
+      }
+      setVirtualKey(key, pressed) {
+        const normalized = String(key || "").toLowerCase();
+        if (!["w", "a", "s", "d"].includes(normalized)) return;
+        if (pressed) {
+          this.keys.add(normalized);
+          this.noteLocalInteraction();
+        } else this.keys.delete(normalized);
+      }
+      tapVirtualArrow(key) {
+        if (this.sim.inputSource !== "local") return;
+        const normalized = String(key || "").toLowerCase();
+        if (normalized === "arrowup") this.sim.toggleLCA();
+        if (normalized === "arrowdown") this.sim.toggleACC();
+        this.noteLocalInteraction();
+      }
+      releaseVirtualKeys() {
+        ["w", "a", "s", "d"].forEach(key => this.keys.delete(key));
       }
       bindGamepadEvents() {
         window.addEventListener("gamepadconnected", event => {
@@ -2056,6 +2129,7 @@
         this.bind();
       }
       bind() {
+        this.bindTouchControls();
         $("modBtn").addEventListener("click", () => $("modPanel").classList.toggle("open"));
         $("modClose").addEventListener("click", () => $("modPanel").classList.remove("open"));
         $("cockpitBtn").addEventListener("click", () => {
@@ -2125,6 +2199,51 @@
             $("gamepadModal").classList.remove("open");
             $("modPanel").classList.remove("open");
           }
+        });
+      }
+      bindTouchControls() {
+        const root = $("touchControls");
+        if (!root || !IS_MOBILE_DEVICE) return;
+        const activeHolds = new Map();
+        const releaseHold = button => {
+          const key = activeHolds.get(button);
+          if (!key) return;
+          activeHolds.delete(button);
+          button.classList.remove("active");
+          this.input.setVirtualKey(key, false);
+        };
+        root.querySelectorAll("[data-touch-hold]").forEach(button => {
+          const key = (button.dataset.touchHold || "").toLowerCase();
+          button.addEventListener("pointerdown", event => {
+            if (event.pointerType === "mouse" && event.button !== 0) return;
+            event.preventDefault();
+            activeHolds.set(button, key);
+            button.classList.add("active");
+            this.input.setVirtualKey(key, true);
+            if (button.setPointerCapture) button.setPointerCapture(event.pointerId);
+          });
+          button.addEventListener("pointerup", () => releaseHold(button));
+          button.addEventListener("pointercancel", () => releaseHold(button));
+          button.addEventListener("pointerleave", () => releaseHold(button));
+        });
+        root.querySelectorAll("[data-touch-tap]").forEach(button => {
+          const key = (button.dataset.touchTap || "").toLowerCase();
+          button.addEventListener("pointerdown", event => {
+            if (event.pointerType === "mouse" && event.button !== 0) return;
+            event.preventDefault();
+            button.classList.add("active");
+            this.input.tapVirtualArrow(key);
+            setTimeout(() => button.classList.remove("active"), 140);
+          });
+        });
+        window.addEventListener("blur", () => {
+          activeHolds.forEach((_, button) => releaseHold(button));
+          this.input.releaseVirtualKeys();
+        });
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden) return;
+          activeHolds.forEach((_, button) => releaseHold(button));
+          this.input.releaseVirtualKeys();
         });
       }
       setInputSource(source) {
