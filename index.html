@@ -326,6 +326,7 @@
       <div class="cal-grid">
         <label class="field"><span class="label">Steering Axis</span><select id="steerAxis"></select></label>
         <label class="field"><span class="label">Dead Zone</span><input id="deadzone" type="number" min="0" max="0.5" step="0.01" value="0.08"></label>
+        <label class="field"><span class="label">Ignore Gamepad Pedals</span><select id="ignorePedals"><option value="false">Off</option><option value="true">On (keyboard accel/brake only)</option></select></label>
         <label class="field"><span class="label range-head">Steering Gain <output id="steerGainValue">0.68×</output></span><input id="steerGain" type="range" min="0.35" max="1.25" step="0.01" value="0.68"></label>
         <label class="field"><span class="label">Accelerator Input</span><select id="accelAxis"></select></label>
         <label class="field"><span class="label">Accelerator</span><select id="accelInvert"><option value="false">Normal</option><option value="true">Inverted</option></select></label>
@@ -1513,6 +1514,8 @@
         this.padButtonState = { acc: false, lca: false };
         this.pedalDetection = null;
         this.actionButtonDetection = null;
+        this.suspiciousPedalFrames = 0;
+        this.phantomPedalNoticeShown = false;
         this.knownGamepads = new Set();
         this.mapping = this.loadMapping();
         this.bindKeyboard();
@@ -1525,7 +1528,7 @@
           steerAxis: 0,
           accelType: "axis", accelAxis: 1, accelInvert: true, accelRest: 1, accelFull: -1,
           brakeType: "axis", brakeAxis: 2, brakeInvert: true, brakeRest: 1, brakeFull: -1,
-          accButton: 0, lcaButton: 1, deadzone: .08, steerGain: DEFAULT_DRIVER_STEER_GAIN
+          accButton: 0, lcaButton: 1, deadzone: .08, ignorePedals: false, steerGain: DEFAULT_DRIVER_STEER_GAIN
         };
       }
       loadMapping() {
@@ -1540,6 +1543,7 @@
             mapping.brakeRest = mapping.brakeInvert ? 1 : -1;
             mapping.brakeFull = mapping.brakeInvert ? -1 : 1;
           }
+          mapping.ignorePedals = !!mapping.ignorePedals;
           mapping.steerGain = this.normalizeSteerGain(mapping.steerGain);
           config.driverSteerGain = mapping.steerGain;
           return mapping;
@@ -1553,6 +1557,7 @@
         const [accelType, accelIndex] = $("accelAxis").value.split(":"), [brakeType, brakeIndex] = $("brakeAxis").value.split(":");
         const accelAxis = +accelIndex, brakeAxis = +brakeIndex;
         const accelInvert = $("accelInvert").value === "true", brakeInvert = $("brakeInvert").value === "true";
+        const ignorePedals = $("ignorePedals").value === "true";
         const steerGain = this.applySteerGain($("steerGain").value);
         const keepAccelEndpoints = accelType === this.mapping.accelType && accelAxis === this.mapping.accelAxis && accelInvert === this.mapping.accelInvert;
         const keepBrakeEndpoints = brakeType === this.mapping.brakeType && brakeAxis === this.mapping.brakeAxis && brakeInvert === this.mapping.brakeInvert;
@@ -1567,6 +1572,7 @@
           brakeFull: keepBrakeEndpoints ? this.mapping.brakeFull : brakeDefaults.full,
           accButton: +$("accButton").value, lcaButton: +$("lcaButton").value,
           deadzone: clamp(+$("deadzone").value || .08, 0, .5),
+          ignorePedals,
           steerGain
         };
         this.mapping = m;
@@ -1575,19 +1581,33 @@
         toast("Gamepad calibration saved", "", 1800);
       }
       bindKeyboard() {
+        const normalizeKey = event => {
+          switch (event.code) {
+            case "KeyW": return "w";
+            case "KeyA": return "a";
+            case "KeyS": return "s";
+            case "KeyD": return "d";
+            case "ArrowUp": return "arrowup";
+            case "ArrowDown": return "arrowdown";
+            case "ArrowLeft": return "arrowleft";
+            case "ArrowRight": return "arrowright";
+            default: return (event.key || "").toLowerCase();
+          }
+        };
         window.addEventListener("keydown", event => {
           const editable = /INPUT|SELECT|TEXTAREA/.test(event.target.tagName);
           if (editable) return;
           if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(event.key)) event.preventDefault();
-          this.keys.add(event.key.toLowerCase());
-          if (this.sim.inputSource === "local" && !event.repeat && event.key === "ArrowUp") this.sim.toggleLCA();
-          if (this.sim.inputSource === "local" && !event.repeat && event.key === "ArrowDown") this.sim.toggleACC();
+          const normalized = normalizeKey(event);
+          this.keys.add(normalized);
+          if (this.sim.inputSource === "local" && !event.repeat && normalized === "arrowup") this.sim.toggleLCA();
+          if (this.sim.inputSource === "local" && !event.repeat && normalized === "arrowdown") this.sim.toggleACC();
           $("driveHint").classList.add("hidden");
           if (this.audio.ctx && this.audio.ctx.state === "suspended" && this.audio.enabled) this.audio.ctx.resume();
         }, { passive: false });
         window.addEventListener("keyup", event => {
           if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) event.preventDefault();
-          this.keys.delete(event.key.toLowerCase());
+          this.keys.delete(normalizeKey(event));
         }, { passive: false });
         window.addEventListener("blur", () => this.keys.clear());
       }
@@ -1632,6 +1652,7 @@
         $("accButton").value = String(this.mapping.accButton);
         $("lcaButton").value = String(this.mapping.lcaButton);
         $("deadzone").value = String(this.mapping.deadzone);
+        $("ignorePedals").value = String(!!this.mapping.ignorePedals);
         this.applySteerGain(this.mapping.steerGain);
       }
       normalizeSteerGain(value) {
@@ -1834,8 +1855,22 @@
         const acceleratorReading = this.axisToPedal(this.pedalRawValue(pad, m.accelType, m.accelAxis), m.accelRest, m.accelFull);
         const brakeReading = this.axisToPedal(this.pedalRawValue(pad, m.brakeType, m.brakeAxis), m.brakeRest, m.brakeFull);
         const suppressPedals = this.pedalDetection || $("gamepadModal").classList.contains("open");
-        const accelerator = suppressPedals ? 0 : acceleratorReading;
-        const brake = suppressPedals ? 0 : brakeReading;
+        const pedalsManuallyIgnored = !!m.ignorePedals;
+        const suspiciousPedals = !pedalsManuallyIgnored && acceleratorReading > .22 && brakeReading > .22 && Math.abs(acceleratorReading - brakeReading) < .12;
+        this.suspiciousPedalFrames = suspiciousPedals ? this.suspiciousPedalFrames + 1 : Math.max(0, this.suspiciousPedalFrames - 2);
+        const ignorePhantomPedals = this.suspiciousPedalFrames > 45;
+        if (pedalsManuallyIgnored) {
+          this.suspiciousPedalFrames = 0;
+          this.phantomPedalNoticeShown = false;
+        }
+        if (ignorePhantomPedals && !this.phantomPedalNoticeShown) {
+          this.phantomPedalNoticeShown = true;
+          toast("Ignoring suspicious gamepad pedal signal. Recalibrate or disconnect virtual controllers.", "warn", 3400);
+        } else if (!ignorePhantomPedals && this.suspiciousPedalFrames === 0) {
+          this.phantomPedalNoticeShown = false;
+        }
+        const accelerator = (suppressPedals || pedalsManuallyIgnored || ignorePhantomPedals) ? 0 : acceleratorReading;
+        const brake = (suppressPedals || pedalsManuallyIgnored || ignorePhantomPedals) ? 0 : brakeReading;
         const acc = !!(pad.buttons[m.accButton] && pad.buttons[m.accButton].pressed);
         const lca = !!(pad.buttons[m.lcaButton] && pad.buttons[m.lcaButton].pressed);
         const suppressActionButtons = this.actionButtonDetection || $("gamepadModal").classList.contains("open");
@@ -1845,6 +1880,7 @@
         const activeButtons = pad.buttons.map((b, i) => this.gamepadButtonValue(b) > .02 ? i + ":" + this.gamepadButtonValue(b).toFixed(2) : null).filter(x => x != null);
         $("gamepadLive").textContent = pad.id + "\nAxes: " + pad.axes.map((v, i) => i + ":" + v.toFixed(2)).join("  ") +
           "\nPedals: ACCEL " + acceleratorReading.toFixed(2) + " · BRAKE " + brakeReading.toFixed(2) +
+          "\nPedals ignored: " + (pedalsManuallyIgnored ? "YES" : "NO") +
           "\nActive buttons: " + (activeButtons.join(", ") || "none");
         return { steer, accelerator, brake };
       }
@@ -1858,10 +1894,16 @@
         };
         const pad = this.gamepadControls();
         if (!pad) return keyboard;
+        const keyboardAccelerating = keyboard.accelerator > 0 && keyboard.brake === 0;
+        const keyboardBraking = keyboard.brake > 0 && keyboard.accelerator === 0;
+        let mergedAccelerator = Math.max(keyboard.accelerator, pad.accelerator);
+        let mergedBrake = Math.max(keyboard.brake, pad.brake);
+        if (keyboardAccelerating && pad.brake < .85) mergedBrake = keyboard.brake;
+        if (keyboardBraking && pad.accelerator < .85) mergedAccelerator = keyboard.accelerator;
         return {
           steer: Math.abs(pad.steer) > Math.abs(keyboard.steer) ? pad.steer : keyboard.steer,
-          accelerator: Math.max(keyboard.accelerator, pad.accelerator),
-          brake: Math.max(keyboard.brake, pad.brake)
+          accelerator: mergedAccelerator,
+          brake: mergedBrake
         };
       }
       setExternalControls(value = {}) {
