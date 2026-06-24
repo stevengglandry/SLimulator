@@ -351,7 +351,7 @@
       <div class="modal-head"><h2>Crash Report</h2><button class="btn ghost modal-close" type="button">×</button></div>
       <div id="reportMetrics" class="metric-columns"></div>
       <h3 class="section-title">Crash Log</h3>
-      <div class="table-wrap"><table><thead><tr><th>#</th><th>Time</th><th>Side</th><th>Zone</th><th>MPH</th><th>ADAS</th><th>Odom</th><th>Lat</th><th>Score</th></tr></thead><tbody id="crashRows"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>#</th><th>Time</th><th>Type</th><th>Side</th><th>Zone</th><th>MPH</th><th>ADAS</th><th>Odom</th><th>Lat</th><th>Score</th></tr></thead><tbody id="crashRows"></tbody></table></div>
       <h3 class="section-title" style="margin-top:14px">Reaction Trials</h3>
       <div class="table-wrap"><table><thead><tr><th>#</th><th>Stimulus</th><th>Expected</th><th>Mode</th><th>PDT</th><th>DRT</th><th>Status</th></tr></thead><tbody id="trialRows"></tbody></table></div>
       <div class="modal-actions"><button id="downloadCsv" class="btn micro" type="button">Download CSV</button><button id="downloadTxt" class="btn accent micro" type="button">Download TXT</button></div>
@@ -422,6 +422,10 @@
       const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
       return x - Math.floor(x);
     };
+    const PEDESTRIAN_ANCHOR_SPACING = 16;
+    const PEDESTRIAN_CROSSWALK_SPACING_ANCHORS = 44;
+    const PEDESTRIAN_CROSSWALK_PHASE_ANCHOR = 4;
+    const PEDESTRIAN_MAX_WALK_RANGE = 7.4;
 
     const SCENES = {
       unmapped: { label: "UNMAPPED", lanes: 1, curveAmp: 10.5, trees: .32, buildings: .74, city: 1, median: .8 },
@@ -434,8 +438,10 @@
       shoulderWidth: 2.4,
       grassWidth: 5.5,
       vehicleWidth: 1.82,
+      vehicleLength: 4.6,
       tireTrack: 1.58,
       wheelbase: 2.7,
+      pedestrianHitRadius: .48,
       maxSpeedMps: 80 * MPS_PER_MPH,
       routeWaveMeters: 360,
       driverSteerGain: .68,
@@ -685,6 +691,86 @@
           right: Math.max(...centers) + config.laneWidth / 2
         };
       }
+      roadLayout() {
+        const laneFloat = this.sceneValue("lanes");
+        const roadW = laneFloat * config.laneWidth;
+        const egoCenter = laneFloat <= 2
+          ? (laneFloat - 1) * config.laneWidth / 2
+          : lerp(config.laneWidth / 2, 0, laneFloat - 2);
+        const leftEdge = egoCenter - roadW / 2;
+        const rightEdge = egoCenter + roadW / 2;
+        const medianW = this.sceneValue("median");
+        const leftWall = leftEdge - config.shoulderWidth - config.grassWidth;
+        const rightWall = rightEdge + config.shoulderWidth + config.grassWidth;
+        const oppCenter = leftWall - medianW - roadW / 2 - .35;
+        return { laneFloat, roadW, egoCenter, leftEdge, rightEdge, medianW, leftWall, rightWall, oppCenter };
+      }
+      pedestrianForSegment(segmentNumber, nowSeconds = this.session.elapsed) {
+        if (this.sceneValue("city") <= .45) return null;
+        if ((segmentNumber - PEDESTRIAN_CROSSWALK_PHASE_ANCHOR) % PEDESTRIAN_CROSSWALK_SPACING_ANCHORS !== 0) return null;
+        const layout = this.roadLayout();
+        const seedOffset = this.seed % 10000;
+        const pedSeed = segmentNumber * 23.11 + seedOffset * .37;
+        const side = hash01(pedSeed) < .76 ? 1 : -1;
+        const grassInner = side > 0
+          ? layout.rightEdge + config.shoulderWidth + .55
+          : layout.leftEdge - config.shoulderWidth - .55;
+        const grassOuter = side > 0
+          ? layout.rightEdge + config.shoulderWidth + config.grassWidth - .95
+          : layout.leftEdge - config.shoulderWidth - config.grassWidth + .95;
+        const grassOffset = lerp(grassInner, grassOuter, .32 + hash01(pedSeed + 5) * .44);
+        const routeCycle = (nowSeconds * lerp(.045, .072, hash01(pedSeed + 7)) + hash01(pedSeed + 11)) % 1;
+        const routeAngle = routeCycle * TAU;
+        const walkRange = lerp(4.4, PEDESTRIAN_MAX_WALK_RANGE, hash01(pedSeed + 13));
+        const walkAlong = Math.sin(routeAngle) * walkRange;
+        const lateralLoop = Math.sin(routeAngle * 2 + hash01(pedSeed + 17) * TAU) * .22;
+        return {
+          id: "pedestrian-" + segmentNumber,
+          segment: segmentNumber,
+          side,
+          lateral: grassOffset + side * lateralLoop,
+          s: segmentNumber * PEDESTRIAN_ANCHOR_SPACING - walkAlong,
+          walkAlong,
+          movingForward: Math.cos(routeAngle) >= 0,
+          gaitCycle: nowSeconds * lerp(.96, 1.32, hash01(pedSeed + 23)) + hash01(pedSeed + 29),
+          scale: lerp(.94, 1.12, hash01(pedSeed + 31))
+        };
+      }
+      findPedestrianCollision(previousS, previousLateral) {
+        if (this.sceneValue("city") <= .45) return null;
+        const minS = Math.min(previousS, this.vehicle.s);
+        const maxS = Math.max(previousS, this.vehicle.s);
+        const firstSegment = Math.floor((minS - PEDESTRIAN_MAX_WALK_RANGE - config.vehicleLength) / PEDESTRIAN_ANCHOR_SPACING) - 1;
+        const lastSegment = Math.ceil((maxS + PEDESTRIAN_MAX_WALK_RANGE + config.vehicleLength) / PEDESTRIAN_ANCHOR_SPACING) + 1;
+        const dS = this.vehicle.s - previousS;
+        const dLat = this.vehicle.lateral - previousLateral;
+        const sweepLengthSq = dS * dS + dLat * dLat;
+        const longitudinalRadius = config.vehicleLength / 2 + config.pedestrianHitRadius;
+        const lateralRadius = config.vehicleWidth / 2 + config.pedestrianHitRadius;
+        let best = null;
+        for (let segment = firstSegment; segment <= lastSegment; segment++) {
+          const pedestrian = this.pedestrianForSegment(segment, this.session.elapsed);
+          if (!pedestrian) continue;
+          const t = sweepLengthSq > .0001
+            ? clamp(((pedestrian.s - previousS) * dS + (pedestrian.lateral - previousLateral) * dLat) / sweepLengthSq, 0, 1)
+            : 1;
+          const closestS = previousS + dS * t;
+          const closestLateral = previousLateral + dLat * t;
+          const deltaS = pedestrian.s - closestS;
+          const deltaLateral = pedestrian.lateral - closestLateral;
+          const normalized = Math.pow(deltaS / longitudinalRadius, 2) + Math.pow(deltaLateral / lateralRadius, 2);
+          if (normalized <= 1 && (!best || normalized < best.normalizedDistance)) {
+            best = {
+              ...pedestrian,
+              normalizedDistance: normalized,
+              deltaS,
+              deltaLateral,
+              side: pedestrian.side > 0 ? "right" : "left"
+            };
+          }
+        }
+        return best;
+      }
       nearestLane(lateral = this.vehicle.lateral) {
         const centers = this.laneCenters();
         let index = 0;
@@ -823,20 +909,32 @@
         else if (c.steer - b.steer < -.28 && c.steer < -.3) this.noteAction("steerLeft");
         else if (c.steer - b.steer > .28 && c.steer > .3) this.noteAction("steerRight");
       }
-      crash(side) {
+      crash(side, options = {}) {
         if (this.crashState) return;
+        const type = options.type || "wall";
         const record = {
-          index: this.crashes.length + 1, time: this.session.elapsed, side, zone: "Crash boundary wall",
+          index: this.crashes.length + 1, time: this.session.elapsed, type, side,
+          zone: options.zone || (type === "pedestrian" ? "Pedestrian crosswalk" : "Crash boundary wall"),
           mph: this.vehicle.speed * MPH_PER_MPS, mode: this.mode(), odometer: this.vehicle.distance,
           lateral: this.vehicle.lateral, score: this.totalScore() - config.crashPenalty
         };
+        if (options.pedestrian) {
+          record.pedestrian = {
+            id: options.pedestrian.id,
+            segment: options.pedestrian.segment,
+            side: options.pedestrian.side,
+            s: options.pedestrian.s,
+            lateral: options.pedestrian.lateral
+          };
+        }
         this.crashes.push(record);
         this.metrics.crashCount++;
         this.adas.accActive = false; this.adas.lcaActive = false; this.adas.autoArmed = false;
         this.crashState = { phase: "braking", stoppedFor: 0 };
         this.audio.burst("screech"); setTimeout(() => this.audio.burst("impact"), 90);
-        this.setDIC("CRASH!", 10);
-        toast("CRASH! Driver input locked", "danger", 2400);
+        const message = type === "pedestrian" ? "PEDESTRIAN CRASH!" : "CRASH!";
+        this.setDIC(message, 10);
+        toast(message + " Driver input locked", "danger", 2400);
         publish("event", { type: "crash", crash: record }, false);
       }
       update(dt, suppliedControls) {
@@ -912,6 +1010,8 @@
         this.vehicle.speed = clamp(this.vehicle.speed + accel * dt, 0, config.maxSpeedMps);
         if (c.brake > .82 && this.vehicle.speed > 11) this.audio.burstDebounce = true;
 
+        const previousS = this.vehicle.s;
+        const previousLateral = this.vehicle.lateral;
         const yawRate = this.vehicle.speed / config.wheelbase * Math.tan(this.vehicle.steerAngle);
         this.vehicle.headingError += (yawRate - this.pathCurvature(this.vehicle.s) * this.vehicle.speed) * dt;
         this.vehicle.headingError = clamp(this.vehicle.headingError, -1.18, 1.18);
@@ -937,8 +1037,10 @@
           }
           const leftWall = bounds.left - config.shoulderWidth - config.grassWidth;
           const rightWall = bounds.right + config.shoulderWidth + config.grassWidth;
-          if (this.vehicle.lateral - config.vehicleWidth / 2 <= leftWall) this.crash("left");
-          if (this.vehicle.lateral + config.vehicleWidth / 2 >= rightWall) this.crash("right");
+          const pedestrianHit = !this.crashState ? this.findPedestrianCollision(previousS, previousLateral) : null;
+          if (pedestrianHit) this.crash(pedestrianHit.side, { type: "pedestrian", zone: "Pedestrian crosswalk", pedestrian: pedestrianHit });
+          if (!this.crashState && this.vehicle.lateral - config.vehicleWidth / 2 <= leftWall) this.crash("left");
+          if (!this.crashState && this.vehicle.lateral + config.vehicleWidth / 2 >= rightWall) this.crash("right");
 
           this.sampleClock += dt;
           if (this.sampleClock >= 1 / config.sampleHz) {
@@ -1045,6 +1147,7 @@
         this.makeEnvironment();
         this.makeRoadPool();
         this.makeSceneryPool();
+        this.makePedestrianPool();
         this.resize();
         window.addEventListener("resize", () => this.resize());
         canvas.addEventListener("webglcontextlost", event => {
@@ -1080,7 +1183,16 @@
           mountain: standard(0x627878, 1, 0, { flatShading: true }),
           cloud: standard(0xe7edef, 1),
           signal: standard(0x263036, .8, .15),
-          green: new THREE.MeshBasicMaterial({ color: 0x5cff87 })
+          green: new THREE.MeshBasicMaterial({ color: 0x5cff87 }),
+          pedSkin: standard(0xd6a07d, .72),
+          pedHair: standard(0x202532, .9),
+          pedShirt: standard(0xeaf0f3, .78),
+          pedJacket: standard(0x4c6697, .78),
+          pedPants: standard(0x6277b1, .84),
+          pedShoes: standard(0x151b24, .9),
+          pedShadow: new THREE.MeshBasicMaterial({
+            color: 0x07100b, transparent: true, opacity: .28, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1
+          })
         };
         this.roadShadeMaterial = new THREE.MeshBasicMaterial({
           color: 0x000000, transparent: true, opacity: .16, depthWrite: false
@@ -1299,12 +1411,194 @@
         this.tmpQuat = new THREE.Quaternion();
         this.tmpScale = new THREE.Vector3();
       }
+      createPedestrianTexture() {
+        const canvas = document.createElement("canvas");
+        canvas.width = 192; canvas.height = 384;
+        const ctx = canvas.getContext("2d");
+        const roundRect = (x, y, w, h, r) => {
+          ctx.beginPath();
+          ctx.moveTo(x + r, y);
+          ctx.lineTo(x + w - r, y);
+          ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+          ctx.lineTo(x + w, y + h - r);
+          ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+          ctx.lineTo(x + r, y + h);
+          ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+          ctx.lineTo(x, y + r);
+          ctx.quadraticCurveTo(x, y, x + r, y);
+          ctx.closePath();
+        };
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+
+        ctx.save();
+        ctx.translate(0, 3);
+        ctx.strokeStyle = "#4f67a1";
+        ctx.lineWidth = 22;
+        ctx.beginPath(); ctx.moveTo(86, 207); ctx.quadraticCurveTo(77, 256, 68, 319); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(106, 207); ctx.quadraticCurveTo(114, 257, 125, 319); ctx.stroke();
+        ctx.strokeStyle = "#141b25";
+        ctx.lineWidth = 13;
+        ctx.beginPath(); ctx.moveTo(63, 325); ctx.lineTo(82, 325); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(118, 325); ctx.lineTo(137, 325); ctx.stroke();
+
+        ctx.strokeStyle = "#3f5f96";
+        ctx.lineWidth = 20;
+        ctx.beginPath(); ctx.moveTo(66, 122); ctx.quadraticCurveTo(49, 167, 42, 218); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(126, 122); ctx.quadraticCurveTo(144, 168, 151, 218); ctx.stroke();
+        ctx.fillStyle = "#d8a17e";
+        ctx.beginPath(); ctx.ellipse(39, 226, 8, 10, 0, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(153, 226, 8, 10, 0, 0, TAU); ctx.fill();
+
+        const jacket = ctx.createLinearGradient(54, 98, 138, 210);
+        jacket.addColorStop(0, "#4a6fa8");
+        jacket.addColorStop(1, "#2f4b7d");
+        ctx.fillStyle = jacket;
+        ctx.beginPath();
+        ctx.moveTo(61, 104);
+        ctx.bezierCurveTo(76, 92, 116, 92, 131, 104);
+        ctx.quadraticCurveTo(137, 152, 128, 210);
+        ctx.quadraticCurveTo(96, 227, 64, 210);
+        ctx.quadraticCurveTo(55, 153, 61, 104);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#ecf1f3";
+        ctx.beginPath();
+        ctx.moveTo(84, 108);
+        ctx.quadraticCurveTo(96, 101, 108, 108);
+        ctx.lineTo(113, 204);
+        ctx.quadraticCurveTo(96, 213, 79, 204);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "#263244";
+        ctx.beginPath();
+        ctx.moveTo(96, 118);
+        ctx.lineTo(103, 154);
+        ctx.lineTo(96, 174);
+        ctx.lineTo(89, 154);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#d8a17e";
+        roundRect(85, 75, 22, 26, 9);
+        ctx.fill();
+        ctx.beginPath(); ctx.ellipse(96, 58, 29, 35, 0, 0, TAU); ctx.fill();
+        ctx.fillStyle = "#202532";
+        ctx.beginPath();
+        ctx.ellipse(96, 35, 33, 14, 0, 0, TAU);
+        ctx.quadraticCurveTo(117, 51, 115, 65);
+        ctx.quadraticCurveTo(96, 53, 75, 67);
+        ctx.quadraticCurveTo(75, 48, 96, 35);
+        ctx.fill();
+
+        ctx.fillStyle = "#2d3443";
+        ctx.beginPath(); ctx.ellipse(86, 58, 2.4, 3.4, 0, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(106, 58, 2.4, 3.4, 0, 0, TAU); ctx.fill();
+        ctx.strokeStyle = "rgba(96,54,43,.48)";
+        ctx.lineWidth = 2.2;
+        ctx.beginPath(); ctx.moveTo(97, 61); ctx.lineTo(94, 72); ctx.stroke();
+        ctx.strokeStyle = "rgba(83,43,45,.58)";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(87, 80); ctx.quadraticCurveTo(96, 85, 106, 80); ctx.stroke();
+        ctx.restore();
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.magFilter = THREE.LinearFilter;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.needsUpdate = true;
+        return texture;
+      }
+      makePedestrianPool() {
+        this.pedestrianTexture = this.createPedestrianTexture();
+        const spriteMaterial = new THREE.SpriteMaterial({
+          map: this.pedestrianTexture, transparent: true, alphaTest: .08, depthWrite: false
+        });
+        const shadowGeo = new THREE.CircleGeometry(.52, 18);
+        shadowGeo.rotateX(-Math.PI / 2);
+        const makePart = (parent, geometry, material, scale, position, name) => {
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.name = name;
+          mesh.scale.fromArray(scale);
+          mesh.position.fromArray(position);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          parent.add(mesh);
+          return mesh;
+        };
+        this.pedestrians = [];
+        for (let i = 0; i < 8; i++) {
+          const root = new THREE.Group();
+          root.name = "crosswalk-pedestrian-" + i;
+          root.visible = false;
+          root.userData.groundOffset = .018;
+
+          const shadow = makePart(root, shadowGeo, this.mat.pedShadow, [.72, 1, .38], [0, .018, 0], "pedestrian-shadow");
+          shadow.castShadow = false;
+          shadow.renderOrder = 2;
+
+          const sprite = new THREE.Sprite(spriteMaterial.clone());
+          sprite.name = "pedestrian-illustrated-sprite";
+          sprite.center.set(.5, 0);
+          sprite.scale.set(.92, 2.28, 1);
+          sprite.position.set(0, .025, 0);
+          sprite.renderOrder = 5;
+          root.add(sprite);
+          this.scene.add(root);
+          this.pedestrians.push({
+            root,
+            shadow,
+            sprite,
+            spriteBaseScale: new THREE.Vector2(.92, 2.28)
+          });
+        }
+      }
       setInstance(mesh, index, x, y, z, sx, sy, sz, rotY = 0) {
         this.tmpPos.set(x, y, z);
         this.tmpQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rotY);
         this.tmpScale.set(sx, sy, sz);
         this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
         mesh.setMatrixAt(index, this.tmpMatrix);
+      }
+      setPedestrian(index, x, z, rotY, scale, gaitCycle) {
+        const pedestrian = this.pedestrians[index];
+        if (!pedestrian) return false;
+        const stride = Math.sin(gaitCycle * TAU);
+        const lift = Math.abs(Math.sin(gaitCycle * TAU * 2));
+        const bob = lift * .035;
+        pedestrian.root.visible = true;
+        pedestrian.root.position.set(x, pedestrian.root.userData.groundOffset + bob, z);
+        pedestrian.root.rotation.y = pedestrian.sprite ? 0 : rotY;
+        pedestrian.root.scale.setScalar(scale);
+        if (pedestrian.sprite) {
+          pedestrian.sprite.scale.set(
+            pedestrian.spriteBaseScale.x * (1 + Math.abs(stride) * .018),
+            pedestrian.spriteBaseScale.y * (1 - lift * .012),
+            1
+          );
+          pedestrian.sprite.material.rotation = stride * .035;
+        } else {
+          pedestrian.leftLeg.rotation.set(stride * .56, 0, -.04);
+          pedestrian.rightLeg.rotation.set(-stride * .56, 0, .04);
+          pedestrian.leftArm.rotation.set(-stride * .42, 0, -.16);
+          pedestrian.rightArm.rotation.set(stride * .42, 0, .16);
+          pedestrian.leftFoot.rotation.x = -Math.max(0, stride) * .28;
+          pedestrian.rightFoot.rotation.x = Math.min(0, stride) * .28;
+        }
+        pedestrian.shadow.scale.set(.82 + lift * .08, 1, .45 + lift * .05);
+        return true;
+      }
+      placeIntersectionPedestrian(pedestrianIndex, sample, tangentX, tangentZ, tangentRotation, segmentNumber, seedOffset, leftEdge, rightEdge, visibleRoadDistance, nowSeconds) {
+        if (pedestrianIndex >= this.pedestrians.length) return pedestrianIndex;
+        const pedestrian = this.sim.pedestrianForSegment(segmentNumber, nowSeconds);
+        if (!pedestrian) return pedestrianIndex;
+        const objectX = sample.x + sample.rightX * pedestrian.lateral + tangentX * pedestrian.walkAlong;
+        const objectZ = sample.z + sample.rightZ * pedestrian.lateral + tangentZ * pedestrian.walkAlong;
+        if (objectZ > 38 || objectZ < -visibleRoadDistance - 10) return pedestrianIndex;
+        const facing = tangentRotation + (pedestrian.movingForward ? 0 : Math.PI);
+        return this.setPedestrian(pedestrianIndex, objectX, objectZ, facing, pedestrian.scale, pedestrian.gaitCycle) ? pedestrianIndex + 1 : pedestrianIndex;
       }
       updateRibbon(mesh, leftOffset, rightOffset, y) {
         const position = mesh.geometry.attributes.position;
@@ -1354,7 +1648,7 @@
         sample.rightZ = Math.sin(sample.deltaHeading);
         return sample;
       }
-      updateRoad() {
+      updateRoad(now = 0) {
         const s = this.sim.vehicle.s;
         const roadHeading = this.sim.pathHeading(s);
         const vehicleHeading = roadHeading + this.sim.vehicle.headingError;
@@ -1415,11 +1709,12 @@
         const buildingDensity = this.sim.sceneValue("buildings");
         const treeDensity = this.sim.sceneValue("trees");
         const seedOffset = this.sim.seed % 10000;
-        let buildingIndex = 0, wingIndex = 0, treeIndex = 0, crownPuffIndex = 0, shadowIndex = 0, crossIndex = 0, poleIndex = 0, lightIndex = 0, reflectorIndex = 0;
-        const anchorSpacing = 16;
+        let buildingIndex = 0, wingIndex = 0, treeIndex = 0, crownPuffIndex = 0, shadowIndex = 0, crossIndex = 0, poleIndex = 0, lightIndex = 0, reflectorIndex = 0, pedestrianIndex = 0;
+        const anchorSpacing = PEDESTRIAN_ANCHOR_SPACING;
         const firstAnchor = Math.floor((s - 64) / anchorSpacing);
         const visibleRoadDistance = this.roadSampleSpacing * (this.roadSampleCount - this.roadBackSamples - 2);
         const lastAnchor = Math.ceil((s + visibleRoadDistance) / anchorSpacing);
+        const nowSeconds = now * .001;
         const sample = { absS: 0, x: 0, z: 0, rightX: 1, rightZ: 0, deltaHeading: 0 };
 
         for (let anchorIndex = firstAnchor; anchorIndex <= lastAnchor; anchorIndex++) {
@@ -1439,7 +1734,7 @@
             this.setInstance(this.reflectors, reflectorIndex++, rightX, .61, rightZ, .04, .11, .8, tangentRotation);
           }
 
-          const intersection = cityMix > .45 && ((segmentNumber + seedOffset) % 22 === 0);
+          const intersection = cityMix > .45 && ((segmentNumber - PEDESTRIAN_CROSSWALK_PHASE_ANCHOR) % PEDESTRIAN_CROSSWALK_SPACING_ANCHORS === 0);
           if (intersection && crossIndex < this.crossRoads.instanceMatrix.count) {
             const crossCenter = (oppCenter - roadW / 2 + rightWall) / 2;
             const crossX = sample.x + sample.rightX * crossCenter;
@@ -1452,6 +1747,7 @@
               this.setInstance(this.signalPoles, poleIndex++, sx, 2.7, sz, .15, 5.4, .15, tangentRotation);
               this.setInstance(this.signalLights, lightIndex++, sx, 5.15, sz, .34, .34, .34, tangentRotation);
             }
+            pedestrianIndex = this.placeIntersectionPedestrian(pedestrianIndex, sample, tangentX, tangentZ, tangentRotation, segmentNumber, seedOffset, leftEdge, rightEdge, visibleRoadDistance, nowSeconds);
           }
 
           if (sample.z < 24) {
@@ -1527,6 +1823,7 @@
         this.sceneryShadows.count = shadowIndex;
         this.crossRoads.count = crossIndex; this.signalPoles.count = poleIndex; this.signalLights.count = lightIndex;
         this.reflectors.count = reflectorIndex;
+        for (let i = pedestrianIndex; i < this.pedestrians.length; i++) this.pedestrians[i].root.visible = false;
         [this.buildings, this.buildingCaps, this.buildingWings, this.trunks, this.crowns, this.crownPuffs, this.sceneryShadows, this.crossRoads, this.signalPoles, this.signalLights, this.reflectors]
           .forEach(mesh => mesh.instanceMatrix.needsUpdate = true);
       }
@@ -1546,7 +1843,7 @@
         publish("event", { type: "quality-change", quality: enabled ? "performance" : "high" }, false);
       }
       render(now) {
-        this.updateRoad();
+        this.updateRoad(now);
         const speed = this.sim.vehicle.speed;
         const bob = speed > 1 ? Math.sin(now * .008) * Math.min(.025, speed * .0008) : 0;
         this.camera.position.y = 2.05 + bob;
@@ -2066,7 +2363,7 @@
       ];
       if (!report.crashes.length) lines.push("No crashes logged.");
       report.crashes.forEach(c => lines.push(
-        [c.index, fmtTime(c.time), c.side, c.zone, c.mph.toFixed(1) + " mph", c.mode.toUpperCase(), c.odometer.toFixed(3) + " m", c.lateral.toFixed(3) + " m", c.score.toFixed(1)].join(" | ")
+        [c.index, fmtTime(c.time), c.type || "wall", c.side, c.zone, c.mph.toFixed(1) + " mph", c.mode.toUpperCase(), c.odometer.toFixed(3) + " m", c.lateral.toFixed(3) + " m", c.score.toFixed(1)].join(" | ")
       ));
       lines.push("", "REACTION TRIALS");
       if (!report.trials.length) lines.push("No reaction trials logged.");
@@ -2081,7 +2378,7 @@
       return /[",\r\n]/.test(s) ? "\"" + s.replace(/"/g, "\"\"") + "\"" : s;
     }
     function reportCSV(report) {
-      const columns = ["record_type","key","value","index","time_s","side","zone","mph","mode","odometer_m","lateral_m","score","stimulus","expected_action","pdt_s","drt_s","status","sub_id","seed"];
+      const columns = ["record_type","key","value","index","time_s","crash_type","side","zone","mph","mode","odometer_m","lateral_m","score","stimulus","expected_action","pdt_s","drt_s","status","sub_id","seed"];
       const rows = [columns];
       const add = obj => rows.push(columns.map(k => csvCell(obj[k])));
       const m = report.metrics;
@@ -2096,7 +2393,7 @@
       };
       Object.entries(metricEntries).forEach(([key, value]) => add({ record_type: "metric", key, value, sub_id: report.subId, seed: report.seed }));
       report.crashes.forEach(c => add({
-        record_type: "crash", index: c.index, time_s: c.time, side: c.side, zone: c.zone, mph: c.mph,
+        record_type: "crash", index: c.index, time_s: c.time, crash_type: c.type || "wall", side: c.side, zone: c.zone, mph: c.mph,
         mode: c.mode, odometer_m: c.odometer, lateral_m: c.lateral, score: c.score, sub_id: report.subId, seed: report.seed
       }));
       report.trials.forEach(t => add({
@@ -2271,8 +2568,8 @@
         ];
         $("reportMetrics").innerHTML = items.map(item => "<div class=\"metric\"><span>" + item[0] + "</span><strong>" + item[1] + "</strong></div>").join("");
         $("crashRows").innerHTML = report.crashes.length ? report.crashes.map(c =>
-          "<tr><td>" + c.index + "</td><td>" + fmtTime(c.time) + "</td><td>" + c.side + "</td><td class=\"zone\">" + c.zone + "</td><td>" + c.mph.toFixed(1) + "</td><td>" + c.mode.toUpperCase() + "</td><td>" + c.odometer.toFixed(3) + "</td><td>" + c.lateral.toFixed(3) + "</td><td>" + c.score.toFixed(1) + "</td></tr>"
-        ).join("") : "<tr><td colspan=\"9\" class=\"empty-row\">No crashes logged this session</td></tr>";
+          "<tr><td>" + c.index + "</td><td>" + fmtTime(c.time) + "</td><td>" + (c.type || "wall") + "</td><td>" + c.side + "</td><td class=\"zone\">" + c.zone + "</td><td>" + c.mph.toFixed(1) + "</td><td>" + c.mode.toUpperCase() + "</td><td>" + c.odometer.toFixed(3) + "</td><td>" + c.lateral.toFixed(3) + "</td><td>" + c.score.toFixed(1) + "</td></tr>"
+        ).join("") : "<tr><td colspan=\"10\" class=\"empty-row\">No crashes logged this session</td></tr>";
         $("trialRows").innerHTML = report.trials.length ? report.trials.map(t =>
           "<tr><td>" + t.index + "</td><td>" + t.type + "</td><td>" + t.expectedAction + "</td><td>" + t.mode.toUpperCase() + "</td><td>" + (t.pdt == null ? "—" : t.pdt.toFixed(3) + " s") + "</td><td>" + (t.drt == null ? "—" : t.drt.toFixed(3) + " s") + "</td><td>" + t.status + "</td></tr>"
         ).join("") : "<tr><td colspan=\"7\" class=\"empty-row\">No reaction trials logged this session</td></tr>";
@@ -2471,7 +2768,7 @@
     const publicAPI = {
       version: VERSION,
       configure(options = {}) {
-        const allowed = ["laneWidth","shoulderWidth","grassWidth","driverSteerGain","driverSteerExponent","steeringPointsPerSecond","offRoadPenaltyPerSecond","crashPenalty","transitionMs"];
+        const allowed = ["laneWidth","shoulderWidth","grassWidth","vehicleLength","pedestrianHitRadius","driverSteerGain","driverSteerExponent","steeringPointsPerSecond","offRoadPenaltyPerSecond","crashPenalty","transitionMs"];
         allowed.forEach(key => {
           if (options[key] != null && Number.isFinite(Number(options[key]))) config[key] = Number(options[key]);
         });
