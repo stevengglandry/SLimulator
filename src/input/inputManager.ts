@@ -19,25 +19,99 @@ export class InputManager {
     steerGain: 0.75
   };
 
+  public readonly touchControls = { steer: 0, accelerator: 0, brake: 0 };
+  private touchOverlay: HTMLDivElement | null = null;
+
   constructor(private readonly target: HTMLElement | Window = window) {
     target.addEventListener("keydown", this.onKeyDown as EventListener);
     target.addEventListener("keyup", this.onKeyUp as EventListener);
+    if (this.isTouchDevice()) {
+      this.createTouchOverlay();
+    }
   }
 
   dispose(): void {
     this.target.removeEventListener("keydown", this.onKeyDown as EventListener);
     this.target.removeEventListener("keyup", this.onKeyUp as EventListener);
+    if (this.touchOverlay) {
+      this.touchOverlay.remove();
+      this.touchOverlay = null;
+    }
   }
 
   sample(): Controls {
     const keyboard = this.keyboardControls();
     const gamepad = this.gamepadControls();
-    const steer = Math.abs(gamepad.steer) > Math.abs(keyboard.steer) ? gamepad.steer : keyboard.steer;
-    const accelerator = Math.max(keyboard.accelerator, gamepad.accelerator);
-    const brake = Math.max(keyboard.brake, gamepad.brake);
+    const touch = this.touchControls;
+
+    // Pick steer with largest magnitude
+    let steer = keyboard.steer;
+    if (Math.abs(gamepad.steer) > Math.abs(steer)) steer = gamepad.steer;
+    if (Math.abs(touch.steer) > Math.abs(steer)) steer = touch.steer;
+
+    const accelerator = Math.max(keyboard.accelerator, gamepad.accelerator, touch.accelerator);
+    const brake = Math.max(keyboard.brake, gamepad.brake, touch.brake);
     const accButton = this.consumeLatch("acc") || gamepad.accButton;
     const lcaButton = this.consumeLatch("lca") || gamepad.lcaButton;
     return { steer, accelerator, brake, accButton, lcaButton };
+  }
+
+  private isTouchDevice(): boolean {
+    return ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+  }
+
+  private createTouchOverlay(): void {
+    const overlay = document.createElement("div");
+    overlay.className = "mobile-touch-overlay";
+    overlay.innerHTML = `
+      <div class="touch-group steer-group">
+        <button id="touchLeft" class="touch-btn steer-btn" type="button" aria-label="Steer Left">◀</button>
+        <button id="touchRight" class="touch-btn steer-btn" type="button" aria-label="Steer Right">▶</button>
+      </div>
+      <div class="touch-group aux-group">
+        <button id="touchAcc" class="touch-btn aux-btn" type="button">ACC</button>
+        <button id="touchLca" class="touch-btn aux-btn" type="button">LCA</button>
+      </div>
+      <div class="touch-group pedal-group">
+        <button id="touchBrake" class="touch-btn pedal-btn brake" type="button" aria-label="Brake">BRAKE</button>
+        <button id="touchGas" class="touch-btn pedal-btn gas" type="button" aria-label="Accelerate">GAS</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    this.touchOverlay = overlay;
+
+    const leftBtn = overlay.querySelector("#touchLeft") as HTMLElement;
+    const rightBtn = overlay.querySelector("#touchRight") as HTMLElement;
+    const gasBtn = overlay.querySelector("#touchGas") as HTMLElement;
+    const brakeBtn = overlay.querySelector("#touchBrake") as HTMLElement;
+    const accBtn = overlay.querySelector("#touchAcc") as HTMLElement;
+    const lcaBtn = overlay.querySelector("#touchLca") as HTMLElement;
+
+    let leftPressed = false;
+    let rightPressed = false;
+
+    const updateSteer = () => {
+      this.touchControls.steer = (rightPressed ? 1 : 0) - (leftPressed ? 1 : 0);
+    };
+
+    leftBtn.addEventListener("touchstart", (e) => { e.preventDefault(); leftPressed = true; updateSteer(); }, { passive: false });
+    leftBtn.addEventListener("touchend", (e) => { e.preventDefault(); leftPressed = false; updateSteer(); }, { passive: false });
+    leftBtn.addEventListener("touchcancel", (e) => { e.preventDefault(); leftPressed = false; updateSteer(); }, { passive: false });
+
+    rightBtn.addEventListener("touchstart", (e) => { e.preventDefault(); rightPressed = true; updateSteer(); }, { passive: false });
+    rightBtn.addEventListener("touchend", (e) => { e.preventDefault(); rightPressed = false; updateSteer(); }, { passive: false });
+    rightBtn.addEventListener("touchcancel", (e) => { e.preventDefault(); rightPressed = false; updateSteer(); }, { passive: false });
+
+    gasBtn.addEventListener("touchstart", (e) => { e.preventDefault(); this.touchControls.accelerator = 1; }, { passive: false });
+    gasBtn.addEventListener("touchend", (e) => { e.preventDefault(); this.touchControls.accelerator = 0; }, { passive: false });
+    gasBtn.addEventListener("touchcancel", (e) => { e.preventDefault(); this.touchControls.accelerator = 0; }, { passive: false });
+
+    brakeBtn.addEventListener("touchstart", (e) => { e.preventDefault(); this.touchControls.brake = 1; }, { passive: false });
+    brakeBtn.addEventListener("touchend", (e) => { e.preventDefault(); this.touchControls.brake = 0; }, { passive: false });
+    brakeBtn.addEventListener("touchcancel", (e) => { e.preventDefault(); this.touchControls.brake = 0; }, { passive: false });
+
+    accBtn.addEventListener("touchstart", (e) => { e.preventDefault(); this.latches.acc = true; }, { passive: false });
+    lcaBtn.addEventListener("touchstart", (e) => { e.preventDefault(); this.latches.lca = true; }, { passive: false });
   }
 
   liveGamepadLabel(): string {

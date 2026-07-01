@@ -864,3 +864,95 @@ button {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* Mobile Touch Controls Overlay */
+.mobile-touch-overlay {
+  position: absolute;
+  z-index: 99;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 200px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 20px 24px;
+  pointer-events: none;
+}
+
+.mobile-touch-overlay .touch-group {
+  display: flex;
+  gap: 16px;
+  pointer-events: auto;
+}
+
+.mobile-touch-overlay .touch-btn {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(8px);
+  color: #f1f5f9;
+  font-family: inherit;
+  font-size: 24px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  touch-action: manipulation;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  transition: background 0.15s, transform 0.1s, border-color 0.15s;
+}
+
+.mobile-touch-overlay .touch-btn:active {
+  background: rgba(6, 182, 212, 0.42);
+  border-color: var(--cyan);
+  transform: scale(0.92);
+}
+
+.mobile-touch-overlay .aux-group {
+  position: absolute;
+  bottom: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  gap: 12px;
+}
+
+.mobile-touch-overlay .aux-btn {
+  width: 58px;
+  height: 38px;
+  border-radius: 8px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+
+.mobile-touch-overlay .pedal-btn {
+  width: 82px;
+  height: 98px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.mobile-touch-overlay .pedal-btn.brake {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+.mobile-touch-overlay .pedal-btn.brake:active {
+  background: rgba(239, 68, 68, 0.48);
+  border-color: #ef4444;
+}
+
+.mobile-touch-overlay .pedal-btn.gas {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #86efac;
+}
+
+.mobile-touch-overlay .pedal-btn.gas:active {
+  background: rgba(34, 197, 94, 0.48);
+  border-color: #22c55e;
+}
