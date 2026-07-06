@@ -10,14 +10,6 @@ const WHEEL_TRACK_HALF_M = 0.82;
 const FRONT_AXLE_X_M = -1.28;
 const REAR_AXLE_X_M = 1.22;
 const CHASSIS_Y_M = 0.84;
-const ENGINE_ACCEL_MPS2 = 7.0;
-const BRAKE_DECEL_MPS2 = 12.5;
-const ROLLING_DRAG_MPS2 = 0.18;
-const AERO_DRAG = 0.0012;
-const STEER_RESPONSE = 0.42;
-const HEADING_DAMPING = 0.34;
-const REVERSE_ACCEL_MPS2 = 1.2;
-
 export interface WheelVisualState {
   position: Vector3;
   steering: number;
@@ -37,6 +29,14 @@ type VehicleState = {
 
 export class VehiclePhysics {
   readonly fixedDt = 1 / config.fixedHz;
+
+  engineAccel = 7.0;
+  brakeDecel = 12.5;
+  rollingDrag = 0.18;
+  aeroDrag = 0.0012;
+  steerResponse = 0.42;
+  headingDamping = 0.34;
+  reverseAccel = 1.2;
 
   private readonly wheelPositions = [
     new Vector3(FRONT_AXLE_X_M, -0.25, -WHEEL_TRACK_HALF_M),
@@ -67,6 +67,24 @@ export class VehiclePhysics {
     // No external physics resources are held by the deterministic model.
   }
 
+  setParam(key: string, value: number): void {
+    if (key === "engineAccel") this.engineAccel = value;
+    else if (key === "aeroDrag") this.aeroDrag = value;
+    else if (key === "brakeDecel") this.brakeDecel = value;
+    else if (key === "steerResponse") this.steerResponse = value;
+    else if (key === "headingDamping") this.headingDamping = value;
+  }
+
+  getParams() {
+    return {
+      engineAccel: this.engineAccel,
+      aeroDrag: this.aeroDrag,
+      brakeDecel: this.brakeDecel,
+      steerResponse: this.steerResponse,
+      headingDamping: this.headingDamping
+    };
+  }
+
   resetToRoad(road: RoadModel, s: number, lateral: number, speedMps = 0): void {
     this.state = {
       s: Math.max(0, s),
@@ -85,15 +103,15 @@ export class VehiclePhysics {
     const dt = this.fixedDt;
     const state = this.state;
     const steerTarget = clamp(controls.steer, -1, 1) * config.maxSteerRad;
-    state.steerAngle += (steerTarget - state.steerAngle) * STEER_RESPONSE;
+    state.steerAngle += (steerTarget - state.steerAngle) * this.steerResponse;
 
     const speedRatio = clamp(state.speedMps / config.maxSpeedMps, 0, 1);
-    const engine = controls.accelerator * ENGINE_ACCEL_MPS2 * (1 - speedRatio * 0.76);
-    const braking = controls.brake * BRAKE_DECEL_MPS2;
-    const drag = ROLLING_DRAG_MPS2 + state.speedMps * state.speedMps * AERO_DRAG;
+    const engine = controls.accelerator * this.engineAccel * (1 - speedRatio * 0.76);
+    const braking = controls.brake * this.brakeDecel;
+    const drag = this.rollingDrag + state.speedMps * state.speedMps * this.aeroDrag;
     let acceleration = engine - braking - drag;
     if (state.speedMps <= 0.08 && controls.brake > 0.85 && controls.accelerator < 0.05) {
-      acceleration = -REVERSE_ACCEL_MPS2;
+      acceleration = -this.reverseAccel;
     }
 
     state.speedMps = clamp(state.speedMps + acceleration * dt, 0, config.maxSpeedMps);
@@ -106,7 +124,7 @@ export class VehiclePhysics {
     state.s = Math.max(0, state.s + sDot * dt);
     state.lateral += lateralDot * dt;
     state.headingError = normalizeAngle(state.headingError + (yawRate - curvature * sDot) * dt);
-    state.headingError -= state.headingError * HEADING_DAMPING * dt * clamp(1 - Math.abs(controls.steer), 0, 1);
+    state.headingError -= state.headingError * this.headingDamping * dt * clamp(1 - Math.abs(controls.steer), 0, 1);
     state.wheelSpin += state.speedMps * dt / WHEEL_RADIUS_M;
 
     this.lastControls = { ...controls };

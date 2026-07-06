@@ -15,6 +15,7 @@ declare global {
       toggleACC(): void;
       toggleLCA(): void;
       triggerAlert(options?: { type?: "earcon" | "haptic"; expectedAction?: string; id?: string }): string;
+      setPhysicsParam(key: string, value: number): void;
     };
   }
 }

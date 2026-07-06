@@ -956,3 +956,36 @@ button {
   background: rgba(34, 197, 94, 0.48);
   border-color: #22c55e;
 }
+
+/* Range slider customization */
+.field input[type="range"] {
+  appearance: none;
+  background: rgba(1, 6, 12, 0.68);
+  border: 1px solid var(--line);
+  height: 8px;
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  width: 100%;
+  margin: 6px 0;
+}
+
+.field input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--cyan);
+  cursor: pointer;
+  box-shadow: 0 0 8px var(--cyan);
+  transition: transform 0.1s ease, background-color 0.1s ease;
+}
+
+.field input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  background: #aaffeb;
+}
+
+.field input[type="range"]:focus {
+  border-color: rgba(124, 231, 211, 0.72);
+}

@@ -60,6 +60,9 @@ async function boot(): Promise<void> {
     onQuality(high) {
       qualityMode = high ? "high" : "perf";
       renderer.setQualityMode(qualityMode);
+    },
+    onPhysicsChange(key, value) {
+      simulator.physics.setParam(key, value);
     }
   });
 
@@ -88,7 +91,8 @@ async function boot(): Promise<void> {
     setInputSource: (source: "local" | "external") => simulator.setInputSource(source),
     toggleACC: () => simulator.toggleACC(),
     toggleLCA: () => simulator.toggleLCA(),
-    triggerAlert: (options = {}) => simulator.triggerAlert({ ...options, expectedAction: options.expectedAction as ExpectedAction | undefined })
+    triggerAlert: (options = {}) => simulator.triggerAlert({ ...options, expectedAction: options.expectedAction as ExpectedAction | undefined }),
+    setPhysicsParam: (key: string, value: number) => simulator.physics.setParam(key, value)
   };
 
   let lastSnapshot = simulator.snapshot();

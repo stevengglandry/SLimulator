@@ -12,6 +12,7 @@ export interface UiActions {
   onAlert(type: "earcon" | "haptic", expectedAction: string): void;
   onCamera(mode: CameraMode): void;
   onQuality(high: boolean): void;
+  onPhysicsChange(key: string, value: number): void;
 }
 
 export interface UiController {
@@ -81,6 +82,25 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
             <button class="btn micro camera-btn active" data-camera="cockpit" type="button">Cockpit</button>
             <button class="btn micro camera-btn" data-camera="chase" type="button">Chase</button>
             <button class="btn micro camera-btn" data-camera="debug" type="button">Debug</button>
+          </div>
+        </section>
+        <section class="section">
+          <p class="section-title">Physics Tuning</p>
+          <div class="field">
+            <span class="label" id="lblEngineAccel">Engine Accel: 7.0 m/s²</span>
+            <input type="range" id="sliderEngineAccel" min="3.0" max="15.0" step="0.1" value="7.0" />
+          </div>
+          <div class="field">
+            <span class="label" id="lblAeroDrag">Aero Drag: 0.0012</span>
+            <input type="range" id="sliderAeroDrag" min="0.0002" max="0.0050" step="0.0001" value="0.0012" />
+          </div>
+          <div class="field">
+            <span class="label" id="lblBrakeDecel">Brake Power: 12.5 m/s²</span>
+            <input type="range" id="sliderBrakeDecel" min="5.0" max="20.0" step="0.1" value="12.5" />
+          </div>
+          <div class="field">
+            <span class="label" id="lblSteerResponse">Steer Response: 0.42</span>
+            <input type="range" id="sliderSteerResponse" min="0.10" max="1.00" step="0.01" value="0.42" />
           </div>
         </section>
         <section class="section">
@@ -207,6 +227,24 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
       actions.onQuality(button.dataset.quality === "high");
     });
   });
+
+  const handlePhysicsSlider = (sliderId: string, labelId: string, paramName: string, suffix: string = "") => {
+    const slider = must<HTMLInputElement>(sliderId);
+    const label = must<HTMLElement>(labelId);
+    
+    const update = () => {
+      const val = parseFloat(slider.value);
+      label.textContent = `${paramName}: ${val.toFixed(sliderId === "sliderAeroDrag" ? 4 : (suffix === "" ? 2 : 1))}${suffix}`;
+      actions.onPhysicsChange(sliderId.replace("slider", "").replace(/^\w/, (c) => c.toLowerCase()), val);
+    };
+
+    slider.addEventListener("input", update);
+  };
+
+  handlePhysicsSlider("sliderEngineAccel", "lblEngineAccel", "Engine Accel", " m/s²");
+  handlePhysicsSlider("sliderAeroDrag", "lblAeroDrag", "Aero Drag");
+  handlePhysicsSlider("sliderBrakeDecel", "lblBrakeDecel", "Brake Power", " m/s²");
+  handlePhysicsSlider("sliderSteerResponse", "lblSteerResponse", "Steer Response");
 
   return {
     canvas,

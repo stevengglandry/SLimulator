@@ -59,4 +59,11 @@ describe("VehiclePhysics deterministic model", () => {
     const pose = physics.pose(road);
     expect(Object.values(pose).every(Number.isFinite)).toBe(true);
   });
+
+  it("allows dynamically tuning parameters", async () => {
+    const { physics } = await makePhysics();
+    expect(physics.getParams().engineAccel).toBeCloseTo(7.0);
+    physics.setParam("engineAccel", 14.5);
+    expect(physics.getParams().engineAccel).toBeCloseTo(14.5);
+  });
 });
