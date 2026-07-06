@@ -30,11 +30,11 @@ type VehicleState = {
 export class VehiclePhysics {
   readonly fixedDt = 1 / config.fixedHz;
 
-  engineAccel = 7.0;
+  engineAccel = 4.5;
   brakeDecel = 12.5;
   rollingDrag = 0.18;
-  aeroDrag = 0.0012;
-  steerResponse = 0.42;
+  aeroDrag = 0.0023;
+  steerResponse = 0.15;
   headingDamping = 0.34;
   reverseAccel = 1.2;
 

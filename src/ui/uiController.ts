@@ -87,20 +87,20 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
         <section class="section">
           <p class="section-title">Physics Tuning</p>
           <div class="field">
-            <span class="label" id="lblEngineAccel">Engine Accel: 7.0 m/s²</span>
-            <input type="range" id="sliderEngineAccel" min="3.0" max="15.0" step="0.1" value="7.0" />
+            <span class="label" id="lblEngineAccel">Engine Accel: 4.5 m/s²</span>
+            <input type="range" id="sliderEngineAccel" min="3.0" max="15.0" step="0.1" value="4.5" />
           </div>
           <div class="field">
-            <span class="label" id="lblAeroDrag">Aero Drag: 0.0012</span>
-            <input type="range" id="sliderAeroDrag" min="0.0002" max="0.0050" step="0.0001" value="0.0012" />
+            <span class="label" id="lblAeroDrag">Aero Drag: 0.0023</span>
+            <input type="range" id="sliderAeroDrag" min="0.0002" max="0.0050" step="0.0001" value="0.0023" />
           </div>
           <div class="field">
             <span class="label" id="lblBrakeDecel">Brake Power: 12.5 m/s²</span>
             <input type="range" id="sliderBrakeDecel" min="5.0" max="20.0" step="0.1" value="12.5" />
           </div>
           <div class="field">
-            <span class="label" id="lblSteerResponse">Steer Response: 0.42</span>
-            <input type="range" id="sliderSteerResponse" min="0.10" max="1.00" step="0.01" value="0.42" />
+            <span class="label" id="lblSteerResponse">Steer Response: 0.15</span>
+            <input type="range" id="sliderSteerResponse" min="0.10" max="1.00" step="0.01" value="0.15" />
           </div>
         </section>
         <section class="section">

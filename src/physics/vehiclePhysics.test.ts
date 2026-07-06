@@ -16,8 +16,8 @@ describe("VehiclePhysics deterministic model", () => {
     const { road, physics } = await makePhysics();
     for (let i = 0; i < 120; i++) physics.step(road, { steer: 0, accelerator: 1, brake: 0 });
     const fast = physics.pose(road);
-    expect(fast.speedMps).toBeGreaterThan(8);
-    expect(fast.s).toBeGreaterThan(6);
+    expect(fast.speedMps).toBeGreaterThan(6);
+    expect(fast.s).toBeGreaterThan(5);
 
     for (let i = 0; i < 120; i++) physics.step(road, { steer: 0, accelerator: 0, brake: 1 });
     expect(physics.pose(road).speedMps).toBeLessThan(fast.speedMps);
@@ -62,7 +62,7 @@ describe("VehiclePhysics deterministic model", () => {
 
   it("allows dynamically tuning parameters", async () => {
     const { physics } = await makePhysics();
-    expect(physics.getParams().engineAccel).toBeCloseTo(7.0);
+    expect(physics.getParams().engineAccel).toBeCloseTo(4.5);
     physics.setParam("engineAccel", 14.5);
     expect(physics.getParams().engineAccel).toBeCloseTo(14.5);
   });
