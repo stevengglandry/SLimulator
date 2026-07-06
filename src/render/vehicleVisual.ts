@@ -10,13 +10,14 @@ import {
   SpotLight,
   Vector3
 } from "three";
-import type { SimSnapshot } from "../game/types";
+import type { CameraMode, SimSnapshot } from "../game/types";
 import { VehiclePhysics } from "../physics/vehiclePhysics";
 import { createHeadlightBeamMesh, LightTrail } from "./vehicleLights";
 
 export class VehicleVisual {
   readonly group = new Group();
 
+  private readonly exterior = new Group();
   private readonly wheels: Group[] = [];
   private readonly headlightLeft: Mesh;
   private readonly headlightRight: Mesh;
@@ -30,15 +31,28 @@ export class VehicleVisual {
   private readonly tailRightWorld = new Vector3();
   private readonly carRightWorld = new Vector3();
   private readonly wheelSteerAxis = new Vector3(0, 1, 0);
+  private cameraMode: CameraMode = "cockpit";
 
   constructor(scene: Scene, private readonly physics: VehiclePhysics) {
     this.leftTrail = new LightTrail(scene, 0xff1133);
     this.rightTrail = new LightTrail(scene, 0xff1133);
+    this.group.add(this.exterior);
     const headlights = this.createCar();
     this.headlightLeft = headlights.left;
     this.headlightRight = headlights.right;
     this.headlightBeam = headlights.beam;
     scene.add(this.group);
+  }
+
+  setCameraMode(mode: CameraMode): void {
+    this.cameraMode = mode;
+    const exteriorVisible = mode !== "cockpit";
+    this.exterior.visible = exteriorVisible;
+    this.headlightLeft.visible = exteriorVisible;
+    this.headlightRight.visible = exteriorVisible;
+    this.headlightBeam.visible = exteriorVisible;
+    this.leftTrail.mesh.visible = exteriorVisible;
+    this.rightTrail.mesh.visible = exteriorVisible;
   }
 
   update(snapshot: SimSnapshot, nowSeconds: number): void {
@@ -51,16 +65,22 @@ export class VehicleVisual {
     this.tailRightWorld.copy(this.localTailRight).applyMatrix4(this.group.matrixWorld);
     this.carRightWorld.copy(this.localRightAxis).applyQuaternion(this.group.quaternion);
 
-    const lastLeft = this.leftTrail.lastPoint();
-    if (lastLeft && lastLeft.distanceTo(this.tailLeftWorld) > 10) {
+    const exteriorVisible = this.cameraMode !== "cockpit";
+    const lastLeft = exteriorVisible ? this.leftTrail.lastPoint() : null;
+    if (!exteriorVisible) {
+      this.leftTrail.clear();
+      this.rightTrail.clear();
+    } else if (lastLeft && lastLeft.distanceTo(this.tailLeftWorld) > 10) {
       this.leftTrail.clear();
       this.rightTrail.clear();
     }
 
-    this.leftTrail.update(this.tailLeftWorld, this.carRightWorld);
-    this.rightTrail.update(this.tailRightWorld, this.carRightWorld);
+    if (exteriorVisible) {
+      this.leftTrail.update(this.tailLeftWorld, this.carRightWorld);
+      this.rightTrail.update(this.tailRightWorld, this.carRightWorld);
+      this.updateWheels();
+    }
     this.animateLights(nowSeconds);
-    this.updateWheels();
   }
 
   private createCar(): { left: Mesh; right: Mesh; beam: Mesh } {
@@ -81,44 +101,39 @@ export class VehicleVisual {
     const base = new Mesh(new BoxGeometry(3.85, 0.54, 1.7), bodyMat);
     base.position.y = 0.36;
     base.castShadow = true;
-    this.group.add(base);
+    this.exterior.add(base);
 
     const lowerSkirt = new Mesh(new BoxGeometry(3.95, 0.18, 1.86), darkBodyMat);
     lowerSkirt.position.y = 0.18;
-    this.group.add(lowerSkirt);
-
-    const hood = new Mesh(new BoxGeometry(1.48, 0.26, 1.5), bodyMat);
-    hood.position.set(-1.22, 0.68, 0);
-    hood.castShadow = true;
-    this.group.add(hood);
+    this.exterior.add(lowerSkirt);
 
     const cabin = new Mesh(new BoxGeometry(1.32, 0.7, 1.25), bodyMat);
     cabin.position.set(0.34, 0.9, 0);
     cabin.castShadow = true;
-    this.group.add(cabin);
+    this.exterior.add(cabin);
 
     const windshield = new Mesh(new BoxGeometry(0.12, 0.46, 1.12), glassMat);
     windshield.position.set(-0.34, 1.0, 0);
     windshield.rotation.z = -0.2;
-    this.group.add(windshield);
+    this.exterior.add(windshield);
 
     const rearGlass = new Mesh(new BoxGeometry(0.12, 0.42, 1.08), glassMat);
     rearGlass.position.set(0.98, 0.98, 0);
     rearGlass.rotation.z = 0.18;
-    this.group.add(rearGlass);
+    this.exterior.add(rearGlass);
 
     const roof = new Mesh(new BoxGeometry(1.0, 0.12, 1.14), darkBodyMat);
     roof.position.set(0.38, 1.3, 0);
-    this.group.add(roof);
+    this.exterior.add(roof);
 
     const frontBumper = new Mesh(new BoxGeometry(0.12, 0.22, 1.78), darkBodyMat);
     frontBumper.position.set(-1.98, 0.34, 0);
-    this.group.add(frontBumper);
+    this.exterior.add(frontBumper);
 
     const spoiler = new Mesh(new BoxGeometry(0.12, 0.1, 1.9), bodyMat);
     spoiler.position.set(1.88, 0.86, 0);
     spoiler.castShadow = true;
-    this.group.add(spoiler);
+    this.exterior.add(spoiler);
 
     for (let i = 0; i < 4; i++) {
       const wheel = new Group();
@@ -128,7 +143,7 @@ export class VehicleVisual {
       rim.rotation.x = Math.PI / 2;
       wheel.add(tire, rim);
       this.wheels.push(wheel);
-      this.group.add(wheel);
+      this.exterior.add(wheel);
     }
 
     const left = new Mesh(new BoxGeometry(0.08, 0.12, 0.26), lightMat);
@@ -155,7 +170,7 @@ export class VehicleVisual {
     tailLeft.position.set(1.94, 0.5, -0.52);
     const tailRight = tailLeft.clone();
     tailRight.position.z = 0.52;
-    this.group.add(tailLeft, tailRight);
+    this.exterior.add(tailLeft, tailRight);
 
     return { left, right, beam };
   }

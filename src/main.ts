@@ -1,12 +1,13 @@
 import "./styles.css";
 import { AudioSystem } from "./audio/audioSystem";
+import type { PerfSnapshot } from "./diagnostics/perf";
+import { PerfTracker } from "./diagnostics/perf";
 import { VERSION } from "./game/config";
 import { Simulator } from "./game/simulator";
-import type { CameraMode, Controls, ExpectedAction, SceneKey } from "./game/types";
+import type { CameraMode, Controls, ExpectedAction, RenderQuality, SceneKey } from "./game/types";
 import { InputManager } from "./input/inputManager";
 import { WorldRenderer } from "./render/WorldRenderer";
 import { createUi } from "./ui/uiController";
-import { PerfTracker } from "./diagnostics/perf";
 import { bus } from "./engine/events";
 
 async function boot(): Promise<void> {
@@ -18,9 +19,12 @@ async function boot(): Promise<void> {
   const input = new InputManager(window);
   const perf = new PerfTracker();
   let cameraMode: CameraMode = "cockpit";
-  let highQuality = true;
+  let qualityMode: RenderQuality = "high";
   let previousAccButton = false;
   let previousLcaButton = false;
+  let lastGamepadLabel = "No gamepad";
+  let lastGamepadSampleMs = -Infinity;
+  let lastAudioUpdateMs = -Infinity;
   let renderer: WorldRenderer;
 
   const ui = createUi(root, {
@@ -54,14 +58,14 @@ async function boot(): Promise<void> {
       renderer.setCameraMode(cameraMode);
     },
     onQuality(high) {
-      highQuality = high;
-      renderer.setHighQuality(highQuality);
+      qualityMode = high ? "high" : "perf";
+      renderer.setQualityMode(qualityMode);
     }
   });
 
   renderer = new WorldRenderer(ui.canvas, simulator.road, simulator.physics);
   renderer.setCameraMode(cameraMode);
-  renderer.setHighQuality(highQuality);
+  renderer.setQualityMode(qualityMode);
 
   window.addEventListener("resize", () => renderer.resize());
   window.addEventListener("pointerdown", () => audio.resume(), { once: true });
@@ -77,6 +81,7 @@ async function boot(): Promise<void> {
     version: VERSION,
     renderer,
     snapshot: () => simulator.snapshot(),
+    perfSnapshot: (): PerfSnapshot => perf.snapshot(renderer.perfStats()),
     requestScene: (scene: SceneKey, transitionMs?: number) => simulator.requestScene(scene, transitionMs),
     newSession: (options = {}) => simulator.newSession(options),
     setDriverControls: (controls: Partial<Controls>) => simulator.setExternalControls(controls),
@@ -89,15 +94,22 @@ async function boot(): Promise<void> {
   let lastSnapshot = simulator.snapshot();
   function frame(now: number): void {
     const dt = perf.mark(now);
-    const controls = input.sample();
+    const controls = perf.measure("input", () => input.sample());
+    if (now - lastGamepadSampleMs >= 250) {
+      lastGamepadLabel = perf.measure("input", () => input.liveGamepadLabel());
+      lastGamepadSampleMs = now;
+    }
     if (controls.accButton && !previousAccButton) simulator.toggleACC();
     if (controls.lcaButton && !previousLcaButton) simulator.toggleLCA();
     previousAccButton = Boolean(controls.accButton);
     previousLcaButton = Boolean(controls.lcaButton);
-    lastSnapshot = simulator.update(dt, controls);
-    renderer.render(lastSnapshot, now);
-    ui.update(lastSnapshot, perf.fps, input.liveGamepadLabel());
-    audio.update(lastSnapshot);
+    lastSnapshot = perf.measure("sim", () => simulator.update(dt, controls, perf));
+    perf.measure("render", () => renderer.render(lastSnapshot, now, perf));
+    perf.measure("ui", () => ui.update(lastSnapshot, perf.fps, lastGamepadLabel));
+    if (now - lastAudioUpdateMs >= 1000 / 30) {
+      perf.measure("audio", () => audio.update(lastSnapshot));
+      lastAudioUpdateMs = now;
+    }
     requestAnimationFrame(frame);
   }
 

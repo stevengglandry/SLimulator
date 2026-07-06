@@ -161,6 +161,10 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
   const toastEl = must<HTMLElement>("toast");
   let lastSnapshot: SimSnapshot | null = null;
   let toastTimer = 0;
+  let lastHudUpdateMs = -Infinity;
+  let lastLaneUpdateMs = -Infinity;
+  let lastFpsUpdateMs = -Infinity;
+  let lastGamepadUpdateMs = -Infinity;
 
   must("modToggle").addEventListener("click", () => panel.classList.toggle("open"));
   must("closePanel").addEventListener("click", () => panel.classList.remove("open"));
@@ -208,46 +212,59 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
     canvas,
     update(snapshot, fps, gamepadLabel) {
       lastSnapshot = snapshot;
+      const now = performance.now();
       const sceneLabel = SCENES[snapshot.road.scene].label;
-      must("sceneChip").textContent = `${sceneLabel}${snapshot.road.transition ? ` -> ${SCENES[snapshot.road.transition.to].label}` : ""}`;
-      must("fpsChip").textContent = fps ? `${Math.round(fps)} FPS` : "-- FPS";
-      const speedMph = Math.round(snapshot.vehicle.speedMph);
-      must("speedReadout").textContent = String(speedMph).padStart(3, "0");
-      must("accReadout").textContent = snapshot.adas.accActive ? String(Math.round(snapshot.adas.setSpeedMph)) : "OFF";
-      must("lcaReadout").textContent = snapshot.adas.lcaActive ? "ON" : snapshot.adas.autoArmed ? "ARM" : "OFF";
-      must<HTMLElement>("accGauge").classList.toggle("active", snapshot.adas.accActive);
-      must<HTMLElement>("llcaGauge").classList.toggle("active", snapshot.adas.lcaActive || snapshot.adas.autoArmed);
-      must<HTMLElement>("modeGauge").classList.toggle("active", snapshot.adas.mode !== "manual");
-      must("modeReadout").textContent = snapshot.adas.mode === "manual" ? "MAN" : snapshot.adas.mode.toUpperCase();
-      must("accGauge").setAttribute("title", snapshot.adas.accActive ? `ACC set ${Math.round(snapshot.adas.setSpeedMph)} mph` : "ACC off");
-      must("llcaGauge").setAttribute("title", snapshot.adas.lcaActive ? "LLCA active" : snapshot.adas.autoArmed ? "LLCA armed" : "LLCA off");
-      must<HTMLElement>("accGaugeFill").style.width = snapshot.adas.accActive ? `${Math.max(12, Math.min(100, snapshot.adas.setSpeedMph))}%` : "8%";
-      must<HTMLElement>("llcaGaugeFill").style.width = snapshot.adas.lcaActive ? "100%" : snapshot.adas.autoArmed ? "54%" : "8%";
-      must("dic").textContent = snapshot.dicMessage;
-      must("scoreReadout").textContent = fixed(snapshot.metrics.totalScore, 1);
-      must("sdlpReadout").textContent = `${fixed(snapshot.metrics.sdlp, 3)} M`;
-      must("steeringScoreReadout").textContent = fixed(snapshot.metrics.steeringPoints, 1);
-      must("offRoadReadout").textContent = snapshot.metrics.offRoadPenalty > 0 ? `-${fixed(snapshot.metrics.offRoadPenalty, 1)}` : "0.0";
-      must("crashReadout").textContent = `${snapshot.metrics.crashCount} x ${config.crashPenalty}`;
-      must("distanceReadout").textContent = `${Math.round(snapshot.vehicle.distanceM)} M`;
-      must("miniSceneReadout").textContent = `${sceneLabel} - ${snapshot.road.lanesPerDirection} LANE${snapshot.road.lanesPerDirection === 1 ? "" : "S"}`;
-      must("miniModeReadout").textContent = snapshot.adas.mode.toUpperCase();
-      must("statusMode").textContent = snapshot.adas.mode;
-      must("statusLanes").textContent = String(snapshot.road.lanesPerDirection);
-      must("statusQueue").textContent = snapshot.road.queue.map((item) => SCENES[item.target].label).join(" -> ") || "none";
-      must("statusCrashes").textContent = String(snapshot.metrics.crashCount);
-      must("gamepadLive").textContent = gamepadLabel;
-      must<HTMLElement>("accelFill").style.height = `${Math.round(snapshot.vehicle.controls.accelerator * 100)}%`;
-      must<HTMLElement>("brakeFill").style.height = `${Math.round(snapshot.vehicle.controls.brake * 100)}%`;
-      must<HTMLElement>("steering").style.transform = `translateX(-50%) rotate(${(snapshot.vehicle.controls.steer * 86).toFixed(1)}deg)`;
-      must("wheelAcc").classList.toggle("active", snapshot.adas.accActive);
-      must("wheelLca").classList.toggle("active", snapshot.adas.lcaActive || snapshot.adas.autoArmed);
-      drawLaneViz(must<HTMLCanvasElement>("laneCanvas"), snapshot);
-      if (snapshot.vehicle.crashReset) {
-        must("dic").textContent = `${snapshot.dicMessage} - ${snapshot.vehicle.crashReset.phase.toUpperCase()}`;
+      if (now - lastFpsUpdateMs >= 500) {
+        must("fpsChip").textContent = fps ? `${Math.round(fps)} FPS` : "-- FPS";
+        lastFpsUpdateMs = now;
       }
-      must("cockpitToggle").textContent = cockpit.classList.contains("minimized") ? "SHOW" : "COCKPIT";
-      must("statusMode").setAttribute("title", `Elapsed ${formatTime(snapshot.session.elapsed)}`);
+      if (now - lastHudUpdateMs >= 1000 / 15) {
+        must("sceneChip").textContent = `${sceneLabel}${snapshot.road.transition ? ` -> ${SCENES[snapshot.road.transition.to].label}` : ""}`;
+        const speedMph = Math.round(snapshot.vehicle.speedMph);
+        must("speedReadout").textContent = String(speedMph).padStart(3, "0");
+        must("accReadout").textContent = snapshot.adas.accActive ? String(Math.round(snapshot.adas.setSpeedMph)) : "OFF";
+        must("lcaReadout").textContent = snapshot.adas.lcaActive ? "ON" : snapshot.adas.autoArmed ? "ARM" : "OFF";
+        must<HTMLElement>("accGauge").classList.toggle("active", snapshot.adas.accActive);
+        must<HTMLElement>("llcaGauge").classList.toggle("active", snapshot.adas.lcaActive || snapshot.adas.autoArmed);
+        must<HTMLElement>("modeGauge").classList.toggle("active", snapshot.adas.mode !== "manual");
+        must("modeReadout").textContent = snapshot.adas.mode === "manual" ? "MAN" : snapshot.adas.mode.toUpperCase();
+        must("accGauge").setAttribute("title", snapshot.adas.accActive ? `ACC set ${Math.round(snapshot.adas.setSpeedMph)} mph` : "ACC off");
+        must("llcaGauge").setAttribute("title", snapshot.adas.lcaActive ? "LLCA active" : snapshot.adas.autoArmed ? "LLCA armed" : "LLCA off");
+        must<HTMLElement>("accGaugeFill").style.width = snapshot.adas.accActive ? `${Math.max(12, Math.min(100, snapshot.adas.setSpeedMph))}%` : "8%";
+        must<HTMLElement>("llcaGaugeFill").style.width = snapshot.adas.lcaActive ? "100%" : snapshot.adas.autoArmed ? "54%" : "8%";
+        must("dic").textContent = snapshot.dicMessage;
+        must("scoreReadout").textContent = fixed(snapshot.metrics.totalScore, 1);
+        must("sdlpReadout").textContent = `${fixed(snapshot.metrics.sdlp, 3)} M`;
+        must("steeringScoreReadout").textContent = fixed(snapshot.metrics.steeringPoints, 1);
+        must("offRoadReadout").textContent = snapshot.metrics.offRoadPenalty > 0 ? `-${fixed(snapshot.metrics.offRoadPenalty, 1)}` : "0.0";
+        must("crashReadout").textContent = `${snapshot.metrics.crashCount} x ${config.crashPenalty}`;
+        must("distanceReadout").textContent = `${Math.round(snapshot.vehicle.distanceM)} M`;
+        must("miniSceneReadout").textContent = `${sceneLabel} - ${snapshot.road.lanesPerDirection} LANE${snapshot.road.lanesPerDirection === 1 ? "" : "S"}`;
+        must("miniModeReadout").textContent = snapshot.adas.mode.toUpperCase();
+        must("statusMode").textContent = snapshot.adas.mode;
+        must("statusLanes").textContent = String(snapshot.road.lanesPerDirection);
+        must("statusQueue").textContent = snapshot.road.queue.map((item) => SCENES[item.target].label).join(" -> ") || "none";
+        must("statusCrashes").textContent = String(snapshot.metrics.crashCount);
+        must<HTMLElement>("accelFill").style.height = `${Math.round(snapshot.vehicle.controls.accelerator * 100)}%`;
+        must<HTMLElement>("brakeFill").style.height = `${Math.round(snapshot.vehicle.controls.brake * 100)}%`;
+        must<HTMLElement>("steering").style.transform = `translateX(-50%) rotate(${(snapshot.vehicle.controls.steer * 86).toFixed(1)}deg)`;
+        must("wheelAcc").classList.toggle("active", snapshot.adas.accActive);
+        must("wheelLca").classList.toggle("active", snapshot.adas.lcaActive || snapshot.adas.autoArmed);
+        if (snapshot.vehicle.crashReset) {
+          must("dic").textContent = `${snapshot.dicMessage} - ${snapshot.vehicle.crashReset.phase.toUpperCase()}`;
+        }
+        must("cockpitToggle").textContent = cockpit.classList.contains("minimized") ? "SHOW" : "COCKPIT";
+        must("statusMode").setAttribute("title", `Elapsed ${formatTime(snapshot.session.elapsed)}`);
+        lastHudUpdateMs = now;
+      }
+      if (now - lastGamepadUpdateMs >= 250) {
+        must("gamepadLive").textContent = gamepadLabel;
+        lastGamepadUpdateMs = now;
+      }
+      if (now - lastLaneUpdateMs >= 100) {
+        drawLaneViz(must<HTMLCanvasElement>("laneCanvas"), snapshot);
+        lastLaneUpdateMs = now;
+      }
     },
     toast(message, tone = "info", durationMs = 2200) {
       toastEl.textContent = message;

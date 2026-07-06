@@ -2,6 +2,8 @@ export type SceneKey = "unmapped" | "l2" | "l3";
 
 export type CameraMode = "cockpit" | "chase" | "debug";
 
+export type RenderQuality = "high" | "perf";
+
 export interface SceneConfig {
   label: string;
   lanes: number;

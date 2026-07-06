@@ -14,9 +14,12 @@ import {
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
 import { RoadModel } from "../game/route";
-import type { CameraMode, SimSnapshot } from "../game/types";
+import type { CameraMode, RenderQuality, SimSnapshot } from "../game/types";
+import type { PerfRecorder, RendererPerfStats } from "../diagnostics/perf";
 import { VehiclePhysics } from "../physics/vehiclePhysics";
 import { AtmosphereSystem } from "./atmosphere";
 import { RoadRibbonSystem } from "./roadRibbons";
@@ -30,6 +33,7 @@ export class WorldRenderer {
 
   private readonly composer: EffectComposer;
   private readonly bloom: UnrealBloomPass;
+  private readonly fxaa: ShaderPass;
   private readonly atmosphere: AtmosphereSystem;
   private readonly roadRibbons: RoadRibbonSystem;
   private readonly scenery: ScenerySystem;
@@ -44,7 +48,7 @@ export class WorldRenderer {
   private readonly cameraLookTarget = new Vector3();
   private cameraReady = false;
   private cameraMode: CameraMode = "cockpit";
-  private highQuality = true;
+  private qualityMode: RenderQuality = "high";
 
   constructor(canvas: HTMLCanvasElement, private readonly road: RoadModel, private readonly physics: VehiclePhysics) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: "high-performance" });
@@ -62,6 +66,8 @@ export class WorldRenderer {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new Vector2(1, 1), 0.14, 0.28, 0.75);
     this.composer.addPass(this.bloom);
+    this.fxaa = new ShaderPass(FXAAShader);
+    this.composer.addPass(this.fxaa);
     this.composer.addPass(new OutputPass());
     this.atmosphere = new AtmosphereSystem(this.scene, this.road, this.renderer, this.bloom);
 
@@ -84,13 +90,22 @@ export class WorldRenderer {
   setCameraMode(mode: CameraMode): void {
     this.cameraMode = mode;
     this.debugHelper.visible = mode === "debug";
+    this.vehicleVisual.setCameraMode(mode);
   }
 
   setHighQuality(high: boolean): void {
-    this.highQuality = high;
-    this.renderer.setPixelRatio(high ? Math.min(window.devicePixelRatio || 1, 1.7) : 1);
+    this.setQualityMode(high ? "high" : "perf");
+  }
+
+  setQualityMode(mode: RenderQuality): void {
+    this.qualityMode = mode;
+    this.renderer.setPixelRatio(mode === "high" ? Math.min(window.devicePixelRatio || 1, 1.7) : 1);
     this.renderer.shadowMap.enabled = false;
-    this.bloom.enabled = high;
+    this.bloom.enabled = mode === "high";
+    this.fxaa.enabled = mode === "high";
+    this.roadRibbons.setQualityMode(mode);
+    this.scenery.setQualityMode(mode);
+    this.atmosphere.setQualityMode(mode);
     this.resize();
   }
 
@@ -99,19 +114,46 @@ export class WorldRenderer {
     const width = canvas.clientWidth || window.innerWidth;
     const height = canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(width, height, false);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
     this.composer.setSize(width, height);
+    this.fxaa.uniforms.resolution.value.set(1 / Math.max(1, width * this.renderer.getPixelRatio()), 1 / Math.max(1, height * this.renderer.getPixelRatio()));
     this.camera.aspect = width / Math.max(1, height);
     this.camera.updateProjectionMatrix();
   }
 
-  render(snapshot: SimSnapshot, now: number): void {
-    this.atmosphere.update(snapshot, this.highQuality);
-    this.roadRibbons.update(snapshot);
-    this.scenery.update(snapshot, now * 0.001);
-    this.vehicleVisual.update(snapshot, now * 0.001);
-    this.updateCamera(snapshot, now);
-    if (this.highQuality) this.composer.render();
+  render(snapshot: SimSnapshot, now: number, perf?: PerfRecorder): void {
+    const timeSeconds = now * 0.001;
+    this.measure(perf, "atmosphere", () => this.atmosphere.update(snapshot));
+    this.measure(perf, "road", () => this.roadRibbons.update(snapshot));
+    this.measure(perf, "scenery", () => this.scenery.update(snapshot, timeSeconds));
+    this.measure(perf, "vehicle", () => this.vehicleVisual.update(snapshot, timeSeconds));
+    this.measure(perf, "camera", () => this.updateCamera(snapshot, now));
+    if (this.qualityMode === "high") this.composer.render();
     else this.renderer.render(this.scene, this.camera);
+  }
+
+  perfStats(): RendererPerfStats {
+    const canvas = this.renderer.domElement;
+    return {
+      quality: this.qualityMode,
+      pixelRatio: this.renderer.getPixelRatio(),
+      canvas: {
+        width: canvas.width,
+        height: canvas.height,
+        clientWidth: canvas.clientWidth,
+        clientHeight: canvas.clientHeight
+      },
+      render: {
+        calls: this.renderer.info.render.calls,
+        triangles: this.renderer.info.render.triangles,
+        points: this.renderer.info.render.points,
+        lines: this.renderer.info.render.lines
+      },
+      memory: {
+        geometries: this.renderer.info.memory.geometries,
+        textures: this.renderer.info.memory.textures
+      }
+    };
   }
 
   private addLights(): void {
@@ -123,6 +165,11 @@ export class WorldRenderer {
     sun.castShadow = false;
     this.scene.add(sun);
     this.scene.add(sun.target);
+  }
+
+  private measure(stageTimer: PerfRecorder | undefined, stage: Parameters<PerfRecorder["measure"]>[0], fn: () => void): void {
+    if (stageTimer) stageTimer.measure(stage, fn);
+    else fn();
   }
 
   private updateCamera(snapshot: SimSnapshot, now: number): void {

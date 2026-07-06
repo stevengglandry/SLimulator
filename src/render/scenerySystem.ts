@@ -19,7 +19,7 @@ import {
   SphereGeometry
 } from "three";
 import { RoadModel } from "../game/route";
-import type { SimSnapshot } from "../game/types";
+import type { RenderQuality, SimSnapshot } from "../game/types";
 import { hash01, lerp, TAU } from "../shared/math";
 import { createClumpyFoliageGeometry } from "./geometry";
 import { createStreetlightConeMaterial } from "./vehicleLights";
@@ -95,6 +95,8 @@ export class ScenerySystem {
   private readonly urbanBlocks: InstancedMesh;
   private readonly urbanRoofCaps: InstancedMesh;
   private readonly buildingWings: InstancedMesh;
+  private qualityMode: RenderQuality = "high";
+  private lastUpdateKey = "";
 
   constructor(private readonly scene: Scene, private readonly road: RoadModel) {
     const buildingTex = createBuildingTexture();
@@ -126,7 +128,25 @@ export class ScenerySystem {
     this.urbanRoofCaps = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x93b4bb }), 180, true);
   }
 
+  setQualityMode(mode: RenderQuality): void {
+    if (this.qualityMode === mode) return;
+    this.qualityMode = mode;
+    this.lastUpdateKey = "";
+  }
+
   update(snapshot: SimSnapshot, nowSeconds: number): void {
+    const settings = this.qualityMode === "high"
+      ? { backDistance: 50, forwardDistance: 420, timeHz: 8, density: 1 }
+      : { backDistance: 36, forwardDistance: 260, timeHz: 4, density: 0.54 };
+    const transition = snapshot.road.transition;
+    const transitionBucket = transition ? Math.floor(transition.progress * 16) : 0;
+    const startAnchor = Math.floor((snapshot.vehicle.roadPositionM - settings.backDistance) / 18);
+    const endAnchor = Math.ceil((snapshot.vehicle.roadPositionM + settings.forwardDistance) / 18);
+    const timeBucket = Math.floor(nowSeconds * settings.timeHz);
+    const updateKey = `${this.qualityMode}:${startAnchor}:${endAnchor}:${timeBucket}:${snapshot.road.scene}:${transition?.from ?? ""}:${transition?.to ?? ""}:${transitionBucket}`;
+    if (updateKey === this.lastUpdateKey) return;
+    this.lastUpdateKey = updateKey;
+
     const city = this.road.sceneValue("city");
     let buildingDensity = this.road.sceneValue("buildings");
     let treeDensity = this.road.sceneValue("trees");
@@ -136,6 +156,8 @@ export class ScenerySystem {
     const buildingScale = this.road.sceneValue("buildingScale");
     const safetyMargin = this.road.sceneValue("buildingSetback");
     const skylineDensity = this.road.sceneValue("skylineDensity");
+    buildingDensity *= settings.density;
+    treeDensity *= this.qualityMode === "high" ? 1 : 0.48;
 
     const activeBuildingScale = buildingScale;
     const activeUrbanScale = skylineDensity * 1.45;
@@ -165,9 +187,6 @@ export class ScenerySystem {
     let urbanBlock = 0;
     let urbanCap = 0;
     let wing = 0;
-    const startAnchor = Math.floor((baseS - 50) / 18);
-    const endAnchor = Math.ceil((baseS + 420) / 18);
-
     for (let anchor = startAnchor; anchor <= endAnchor; anchor++) {
       const s = anchor * 18;
       const bounds = this.road.boundsAt(s);
@@ -296,14 +315,14 @@ export class ScenerySystem {
             const crown = this.road.worldFromRoad(s + 3, lateral, 7.68);
             setInstance(this.utilityCrossbars, utilityCrossbar++, crown.x, crown.y, crown.z, 0.09, 0.09, 2.7, rot + Math.PI / 2);
           }
-          if (s >= baseS + 28) {
+          if (this.qualityMode === "high" && s >= baseS + 28) {
             for (const wireOffset of [-1.35, -0.45, 0.45, 1.35]) {
               if (utilityWire >= this.capacity(this.utilityWires)) break;
               const wirePoint = this.road.worldFromRoad(s + 58, lateral + wireOffset, 7.74 + Math.abs(wireOffset) * 0.04);
               setInstance(this.utilityWires, utilityWire++, wirePoint.x, wirePoint.y, wirePoint.z, 0.016, 0.016, 46, rot);
             }
           }
-          if (streetlightCone < this.capacity(this.streetlightCones)) {
+          if (this.qualityMode === "high" && streetlightCone < this.capacity(this.streetlightCones)) {
             const offset = lateral < 0 ? 1.7 : -1.7;
             const lightPoint = this.road.worldFromRoad(s + 3, lateral + offset, 6.9);
             setInstance(this.streetlightCones, streetlightCone++, lightPoint.x, lightPoint.y, lightPoint.z, 1.0, 1.0, 1.0, rot);
@@ -351,7 +370,7 @@ export class ScenerySystem {
           building++;
 
           // Optional building wing for detail (always projects away from the road using wingSide = side)
-          if (hash01(shapeSeed + 37) > 0.36 && wing < this.capacity(this.buildingWings)) {
+          if (this.qualityMode === "high" && hash01(shapeSeed + 37) > 0.36 && wing < this.capacity(this.buildingWings)) {
             const wingW = width * lerp(0.4, 0.75, hash01(shapeSeed + 41));
             const wingH = height * lerp(0.35, 0.8, hash01(shapeSeed + 43));
             const wingD = depth * lerp(0.4, 0.75, hash01(shapeSeed + 47));
@@ -387,8 +406,8 @@ export class ScenerySystem {
 
     if (activeUrban) {
       const urbanSpacing = activeUrbanScale > 1.1 ? 42 : 56;
-      const startUrbanAnchor = Math.floor((baseS - 50) / urbanSpacing);
-      const endUrbanAnchor = Math.ceil((baseS + 420) / urbanSpacing);
+      const startUrbanAnchor = Math.floor((baseS - settings.backDistance) / urbanSpacing);
+      const endUrbanAnchor = Math.ceil((baseS + settings.forwardDistance) / urbanSpacing);
 
       for (let anchor = startUrbanAnchor; anchor <= endUrbanAnchor; anchor++) {
         const s = anchor * urbanSpacing;
@@ -535,7 +554,11 @@ export class ScenerySystem {
   }
 
   private capacity(mesh: InstancedMesh): number {
-    return mesh.instanceMatrix.array.length / 16;
+    const max = mesh.instanceMatrix.array.length / 16;
+    if (this.qualityMode === "high") return max;
+    if (mesh === this.guardrailPosts || mesh === this.reflectorMesh) return Math.floor(max * 0.7);
+    if (mesh === this.pedestrianBodies || mesh === this.pedestrianHeads || mesh === this.pedestrianArms || mesh === this.pedestrianLegs) return max;
+    return Math.floor(max * 0.52);
   }
 }
 

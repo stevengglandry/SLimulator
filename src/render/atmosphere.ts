@@ -14,7 +14,7 @@ import {
   WebGLRenderer
 } from "three";
 import { RoadModel } from "../game/route";
-import type { SimSnapshot } from "../game/types";
+import type { RenderQuality, SimSnapshot } from "../game/types";
 import { hash01, lerp } from "../shared/math";
 
 type BloomControl = {
@@ -27,6 +27,7 @@ export class AtmosphereSystem {
   private readonly mountainNear: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly lowFogBand: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private readonly cloudGroup = new Group();
+  private qualityMode: RenderQuality = "high";
 
   constructor(
     private readonly scene: Scene,
@@ -124,7 +125,13 @@ export class AtmosphereSystem {
     this.scene.add(this.cloudGroup);
   }
 
-  update(snapshot: SimSnapshot, highQuality: boolean): void {
+  setQualityMode(mode: RenderQuality): void {
+    this.qualityMode = mode;
+    this.cloudGroup.visible = mode === "high";
+  }
+
+  update(snapshot: SimSnapshot): void {
+    const highQuality = this.qualityMode === "high";
     const forest = this.road.sceneValue("forest");
     const buildings = this.road.sceneValue("buildingScale");
     const urban = Math.min(1, buildings);
@@ -151,7 +158,7 @@ export class AtmosphereSystem {
     const pose = snapshot.vehicle.pose;
     // Update sky and cloud position to move with the camera
     this.sky.position.set(pose.x, 420, pose.z - 900);
-    this.cloudGroup.position.set(pose.x, 0, pose.z);
+    if (highQuality) this.cloudGroup.position.set(pose.x, 0, pose.z);
 
     const far = this.road.worldFromRoad(pose.s + 720, 0, 0);
     const near = this.road.worldFromRoad(pose.s + 430, 0, 0);

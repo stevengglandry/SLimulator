@@ -21,6 +21,7 @@ import type {
 import { VehiclePhysics } from "../physics/vehiclePhysics";
 import { clamp, lerp, lerpAngle } from "../shared/math";
 import { publish } from "../engine/events";
+import type { PerfRecorder } from "../diagnostics/perf";
 
 const PED_ANCHOR_SPACING = 18;
 const PED_CROSSWALK_SPACING_ANCHORS = 44;
@@ -111,13 +112,13 @@ export class Simulator {
     publish("session", this.snapshot(), false);
   }
 
-  update(dt: number, localControls: Controls): SimSnapshot {
+  update(dt: number, localControls: Controls, perf?: PerfRecorder): SimSnapshot {
     const safeDt = clamp(dt, 0, 0.1);
     this.fixedAccumulator += safeDt;
     const fixedDt = this.physics.fixedDt;
     let guard = 0;
     while (this.fixedAccumulator >= fixedDt && guard++ < 8) {
-      this.stepFixed(fixedDt, localControls);
+      this.stepFixed(fixedDt, localControls, perf);
       this.fixedAccumulator -= fixedDt;
     }
     const snapshot = this.snapshot(true);
@@ -280,7 +281,7 @@ export class Simulator {
     return "manual";
   }
 
-  private stepFixed(dt: number, localControls: Controls): void {
+  private stepFixed(dt: number, localControls: Controls, perf?: PerfRecorder): void {
     const transition = this.road.update(dt);
     if (transition.completed) {
       this.finishSceneTransition(transition.completed.from, transition.completed.to);
@@ -315,7 +316,7 @@ export class Simulator {
     const applied = this.crashState ? { steer: 0, accelerator: 0, brake: 1 } : mergeControls(driver, this.adas, before, lane, this.road.scene);
     this.currentControls = applied;
     this.previousPose = { ...before };
-    const after = this.physics.step(this.road, applied);
+    const after = perf ? perf.measure("physics", () => this.physics.step(this.road, applied)) : this.physics.step(this.road, applied);
     this.noteControlActions(driver);
     this.detectCrashes(before, after);
     this.updateMetrics(dt, after);
