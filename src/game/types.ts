@@ -4,6 +4,8 @@ export type CameraMode = "cockpit" | "chase" | "debug";
 
 export type RenderQuality = "high" | "perf";
 
+export type DriverInputSource = "local" | "gamepad" | "external";
+
 export interface SceneConfig {
   label: string;
   lanes: number;
@@ -159,7 +161,7 @@ export interface CrashState {
 export interface SimSnapshot {
   version: string;
   session: SessionState & { seed: number };
-  inputSource: "local" | "external";
+  inputSource: DriverInputSource;
   vehicle: {
     speedMps: number;
     speedMph: number;

@@ -40,13 +40,14 @@ export function mergeControls(driver: Controls, adas: AdasState, pose: VehiclePo
   const maxSteer = manualSteerLimit(pose.speedMps);
   const driverSteer = shapeDriverSteer(driver.steer) * maxSteer * config.driverSteerGain;
   let steerAngle = driverSteer;
-  let accelerator = clamp(driver.accelerator, 0, 1);
+  const driverAccelerator = clamp(driver.accelerator, 0, 1);
+  let accelerator = driverAccelerator;
   let brake = clamp(driver.brake, 0, 1);
 
   if (adas.accActive) {
     const pedals = computeAccPedals(pose.speedMps, adas.setSpeedMps, brake);
-    accelerator = pedals.accelerator;
-    brake = pedals.brake;
+    accelerator = driverAccelerator > 0.05 ? Math.max(driverAccelerator, pedals.accelerator) : pedals.accelerator;
+    brake = driverAccelerator > 0.05 ? 0 : pedals.brake;
   }
 
   if (adas.lcaActive) {

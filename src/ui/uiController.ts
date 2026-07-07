@@ -1,18 +1,22 @@
 import { config, SCENES } from "../game/config";
 import { createLogText } from "../game/logging";
-import type { CameraMode, SceneKey, SimSnapshot } from "../game/types";
+import type { CameraMode, DriverInputSource, SceneKey, SimSnapshot } from "../game/types";
+import type { GamepadMapping } from "../input/inputManager";
 import { fixed, formatTime } from "../shared/math";
 
 export interface UiActions {
   onScene(scene: SceneKey): void;
-  onNewSession(subId: string): void;
+  onNewSession(): void;
   onToggleACC(): void;
   onToggleLCA(): void;
-  onInputSource(source: "local" | "external"): void;
-  onAlert(type: "earcon" | "haptic", expectedAction: string): void;
+  onInputSource(source: DriverInputSource): void;
+  onAlert(type: "earcon" | "haptic"): void;
   onCamera(mode: CameraMode): void;
   onQuality(high: boolean): void;
   onPhysicsChange(key: string, value: number): void;
+  onGamepadMappingChange(mapping: Partial<GamepadMapping>): void;
+  onGamepadMappingReset(): GamepadMapping;
+  getGamepadMapping(): GamepadMapping;
 }
 
 export interface UiController {
@@ -43,14 +47,13 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
         <section class="section">
           <p class="section-title">Scene</p>
           <div class="grid-3">
-            <button class="btn micro scene-btn" data-scene="unmapped" type="button">Forest</button>
+            <button class="btn micro scene-btn" data-scene="unmapped" type="button">Unmapped</button>
             <button class="btn micro scene-btn" data-scene="l2" type="button">L2 Hwy</button>
             <button class="btn micro scene-btn" data-scene="l3" type="button">L3 Hwy</button>
           </div>
         </section>
         <section class="section">
           <p class="section-title">Session</p>
-          <label class="field"><span class="label">SubID</span><input id="subId" autocomplete="off" /></label>
           <div class="grid-2">
             <button id="newSession" class="btn micro accent" type="button">NEW</button>
             <button id="downloadLog" class="btn micro" type="button">LOG</button>
@@ -58,19 +61,25 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
         </section>
         <section class="section">
           <p class="section-title">Driver Source</p>
-          <div class="grid-2">
+          <div class="grid-3">
             <button class="btn micro input-btn active" data-input="local" type="button">Local</button>
+            <button class="btn micro input-btn" data-input="gamepad" type="button">Gamepad</button>
             <button class="btn micro input-btn" data-input="external" type="button">External</button>
           </div>
-          <pre id="gamepadLive" class="label" style="white-space:pre-wrap;margin:10px 0 0;line-height:1.35">No gamepad</pre>
+          <div id="gamepadConfig" class="gamepad-config" hidden>
+            <pre id="gamepadLive" class="gamepad-live label">No gamepad</pre>
+            <div class="compact-fields">
+              <label class="field"><span class="label">Steering Axis</span><select id="gamepadSteerAxis"></select></label>
+              <label class="field"><span class="label">Accel Axis</span><select id="gamepadAccelAxis"></select></label>
+              <label class="field"><span class="label">Brake Axis</span><select id="gamepadBrakeAxis"></select></label>
+              <label class="field"><span class="label">ACC Button</span><select id="gamepadAccButton"></select></label>
+              <label class="field"><span class="label">LCA Button</span><select id="gamepadLcaButton"></select></label>
+            </div>
+            <button id="gamepadReset" class="btn micro" type="button">Reset Mapping</button>
+          </div>
         </section>
         <section class="section">
           <p class="section-title">Alerts</p>
-          <label class="field"><span class="label">Expected</span><select id="expectedAction">
-            <option value="brake">Brake</option><option value="accelerate">Accelerate</option>
-            <option value="steerLeft">Steer Left</option><option value="steerRight">Steer Right</option>
-            <option value="acc">ACC Button</option><option value="lca">LCA Button</option>
-          </select></label>
           <div class="grid-2">
             <button class="btn micro alert-btn" data-alert="earcon" type="button">Earcon</button>
             <button class="btn micro alert-btn" data-alert="haptic" type="button">Haptic</button>
@@ -84,23 +93,27 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
             <button class="btn micro camera-btn" data-camera="debug" type="button">Debug</button>
           </div>
         </section>
-        <section class="section">
-          <p class="section-title">Physics Tuning</p>
-          <div class="field">
-            <span class="label" id="lblEngineAccel">Engine Accel: 4.5 m/s²</span>
-            <input type="range" id="sliderEngineAccel" min="3.0" max="15.0" step="0.1" value="4.5" />
-          </div>
-          <div class="field">
-            <span class="label" id="lblAeroDrag">Aero Drag: 0.0023</span>
-            <input type="range" id="sliderAeroDrag" min="0.0002" max="0.0050" step="0.0001" value="0.0023" />
-          </div>
-          <div class="field">
-            <span class="label" id="lblBrakeDecel">Brake Power: 12.5 m/s²</span>
-            <input type="range" id="sliderBrakeDecel" min="5.0" max="20.0" step="0.1" value="12.5" />
-          </div>
-          <div class="field">
-            <span class="label" id="lblSteerResponse">Steer Response: 0.15</span>
-            <input type="range" id="sliderSteerResponse" min="0.10" max="1.00" step="0.01" value="0.15" />
+        <section id="physicsSection" class="section collapsible-section">
+          <button id="physicsToggle" class="section-toggle micro" type="button" aria-expanded="false">
+            <span>Physics Tuning</span><span id="physicsToggleText">Open</span>
+          </button>
+          <div id="physicsBody" class="collapsible-body" hidden>
+            <div class="field">
+              <span class="label" id="lblEngineAccel">Engine Accel: 4.5 m/s²</span>
+              <input type="range" id="sliderEngineAccel" min="3.0" max="15.0" step="0.1" value="4.5" />
+            </div>
+            <div class="field">
+              <span class="label" id="lblAeroDrag">Aero Drag: 0.0023</span>
+              <input type="range" id="sliderAeroDrag" min="0.0002" max="0.0050" step="0.0001" value="0.0023" />
+            </div>
+            <div class="field">
+              <span class="label" id="lblBrakeDecel">Brake Power: 12.5 m/s²</span>
+              <input type="range" id="sliderBrakeDecel" min="5.0" max="20.0" step="0.1" value="12.5" />
+            </div>
+            <div class="field">
+              <span class="label" id="lblSteerResponse">Steer Response: 0.15</span>
+              <input type="range" id="sliderSteerResponse" min="0.10" max="1.00" step="0.01" value="0.15" />
+            </div>
           </div>
         </section>
         <section class="section">
@@ -141,10 +154,10 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
             <span id="speedReadout" class="legacy-speed">000</span>
             <span class="legacy-mph">mph</span>
           </div>
-          <div class="legacy-pill-row">
-            <div id="accGauge" class="legacy-pill"><span>ACC</span><strong id="accReadout">OFF</strong><i id="accGaugeFill"></i></div>
-            <div id="llcaGauge" class="legacy-pill"><span>LLCA</span><strong id="lcaReadout">OFF</strong><i id="llcaGaugeFill"></i></div>
-            <div id="modeGauge" class="legacy-pill"><span>MODE</span><strong id="modeReadout">MAN</strong><i></i></div>
+          <div id="dicIndicatorRow" class="legacy-pill-row">
+            <div id="accGauge" class="legacy-pill"><strong id="accGaugeLabel">ACC</strong></div>
+            <div id="l2Gauge" class="legacy-pill"><strong>L2</strong></div>
+            <div id="l3Gauge" class="legacy-pill"><strong>L3</strong></div>
           </div>
           <div id="dic" class="dic micro">READY - MANUAL</div>
         </div>
@@ -167,11 +180,44 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
         </div>
       </div>
       <div id="steering" class="steering">
-        <button id="wheelLca" class="wheel-btn lca btn micro" type="button">LLCA</button>
+        <button id="wheelLca" class="wheel-btn lca btn micro" type="button">LCA</button>
         <button id="wheelAcc" class="wheel-btn acc btn micro" type="button">ACC</button>
         <div class="wheel-hub"></div>
       </div>
     </section>
+    <div id="logDialog" class="modal-backdrop" hidden>
+      <div class="log-dialog glass" role="dialog" aria-modal="true" aria-labelledby="logDialogTitle">
+        <div class="panel-head">
+          <h2 id="logDialogTitle">Download Log</h2>
+          <button id="cancelLogTop" class="btn micro" type="button">CLOSE</button>
+        </div>
+        <div class="log-dialog-body">
+          <div class="log-preview" aria-label="Current log contents">
+            <div class="log-preview-head">
+              <span class="label">Total Score</span>
+              <strong id="logTotalScore" class="value">0.0</strong>
+            </div>
+            <div class="log-metric-grid">
+              <div class="metric"><span class="label">Steering</span><span id="logSteeringPoints" class="value">0.0</span></div>
+              <div class="metric"><span class="label">Off-road</span><span id="logOffRoadPenalty" class="value">0.0</span></div>
+              <div class="metric"><span class="label">Crash Penalty</span><span id="logCrashPenalty" class="value">0.0</span></div>
+              <div class="metric"><span class="label">SDLP</span><span id="logSdlp" class="value">0.000 M</span></div>
+              <div class="metric"><span class="label">Duration</span><span id="logDuration" class="value">00:00</span></div>
+              <div class="metric"><span class="label">Distance</span><span id="logDistance" class="value">0 M</span></div>
+            </div>
+            <div class="log-crash-report">
+              <div class="log-preview-title">Crash Report</div>
+              <div id="logCrashList" class="log-crash-list">No crashes recorded</div>
+            </div>
+          </div>
+          <label class="field"><span class="label">Subject ID</span><input id="logSubId" autocomplete="off" /></label>
+          <div class="grid-2">
+            <button id="cancelLog" class="btn micro" type="button">Cancel</button>
+            <button id="confirmLog" class="btn micro accent" type="button">Download</button>
+          </div>
+        </div>
+      </div>
+    </div>
     <div id="toast" class="toast glass micro"></div>
   `;
 
@@ -191,17 +237,53 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
   must("cockpitToggle").addEventListener("click", () => cockpit.classList.toggle("minimized"));
   must("wheelAcc").addEventListener("click", () => actions.onToggleACC());
   must("wheelLca").addEventListener("click", () => actions.onToggleLCA());
-  must("newSession").addEventListener("click", () => actions.onNewSession((must<HTMLInputElement>("subId").value || "").trim()));
-  must("downloadLog").addEventListener("click", () => {
+  must("newSession").addEventListener("click", () => actions.onNewSession());
+  const logDialog = must<HTMLElement>("logDialog");
+  const logSubId = must<HTMLInputElement>("logSubId");
+  const closeLogDialog = () => { logDialog.hidden = true; };
+  const downloadCurrentLog = (subId: string) => {
     if (!lastSnapshot) return;
-    const blob = new Blob([createLogText(lastSnapshot)], { type: "text/plain" });
+    const cleanSubId = subId.trim();
+    const logSnapshot: SimSnapshot = {
+      ...lastSnapshot,
+      session: { ...lastSnapshot.session, subId: cleanSubId }
+    };
+    const blob = new Blob([createLogText(logSnapshot)], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `slimulator-log-${Date.now()}.txt`;
+    const fileSubId = cleanSubId ? `${cleanSubId.replace(/[^a-z0-9_-]/gi, "_")}-` : "";
+    link.download = `slimulator-log-${fileSubId}${Date.now()}.txt`;
     link.click();
     URL.revokeObjectURL(url);
+  };
+  must("downloadLog").addEventListener("click", () => {
+    if (!lastSnapshot) return;
+    updateLogPreview(lastSnapshot);
+    logSubId.value = lastSnapshot.session.subId || "";
+    logDialog.hidden = false;
+    logSubId.focus();
+    logSubId.select();
   });
+  must("confirmLog").addEventListener("click", () => {
+    downloadCurrentLog(logSubId.value);
+    closeLogDialog();
+  });
+  must("cancelLog").addEventListener("click", closeLogDialog);
+  must("cancelLogTop").addEventListener("click", closeLogDialog);
+  logDialog.addEventListener("click", (event) => {
+    if (event.target === logDialog) closeLogDialog();
+  });
+  logSubId.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      downloadCurrentLog(logSubId.value);
+      closeLogDialog();
+    }
+    if (event.key === "Escape") closeLogDialog();
+  });
+
+  setupGamepadMappingControls(actions);
+  setupPhysicsToggle();
 
   document.querySelectorAll<HTMLButtonElement>(".scene-btn").forEach((button) => {
     button.addEventListener("click", () => actions.onScene(button.dataset.scene as SceneKey));
@@ -209,11 +291,13 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
   document.querySelectorAll<HTMLButtonElement>(".input-btn").forEach((button) => {
     button.addEventListener("click", () => {
       setActive(".input-btn", button);
-      actions.onInputSource(button.dataset.input as "local" | "external");
+      const source = button.dataset.input as DriverInputSource;
+      must<HTMLElement>("gamepadConfig").hidden = source !== "gamepad";
+      actions.onInputSource(source);
     });
   });
   document.querySelectorAll<HTMLButtonElement>(".alert-btn").forEach((button) => {
-    button.addEventListener("click", () => actions.onAlert(button.dataset.alert as "earcon" | "haptic", must<HTMLSelectElement>("expectedAction").value));
+    button.addEventListener("click", () => actions.onAlert(button.dataset.alert as "earcon" | "haptic"));
   });
   document.querySelectorAll<HTMLButtonElement>(".camera-btn").forEach((button) => {
     button.addEventListener("click", () => {
@@ -260,16 +344,7 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
         must("sceneChip").textContent = `${sceneLabel}${snapshot.road.transition ? ` -> ${SCENES[snapshot.road.transition.to].label}` : ""}`;
         const speedMph = Math.round(snapshot.vehicle.speedMph);
         must("speedReadout").textContent = String(speedMph).padStart(3, "0");
-        must("accReadout").textContent = snapshot.adas.accActive ? String(Math.round(snapshot.adas.setSpeedMph)) : "OFF";
-        must("lcaReadout").textContent = snapshot.adas.lcaActive ? "ON" : snapshot.adas.autoArmed ? "ARM" : "OFF";
-        must<HTMLElement>("accGauge").classList.toggle("active", snapshot.adas.accActive);
-        must<HTMLElement>("llcaGauge").classList.toggle("active", snapshot.adas.lcaActive || snapshot.adas.autoArmed);
-        must<HTMLElement>("modeGauge").classList.toggle("active", snapshot.adas.mode !== "manual");
-        must("modeReadout").textContent = snapshot.adas.mode === "manual" ? "MAN" : snapshot.adas.mode.toUpperCase();
-        must("accGauge").setAttribute("title", snapshot.adas.accActive ? `ACC set ${Math.round(snapshot.adas.setSpeedMph)} mph` : "ACC off");
-        must("llcaGauge").setAttribute("title", snapshot.adas.lcaActive ? "LLCA active" : snapshot.adas.autoArmed ? "LLCA armed" : "LLCA off");
-        must<HTMLElement>("accGaugeFill").style.width = snapshot.adas.accActive ? `${Math.max(12, Math.min(100, snapshot.adas.setSpeedMph))}%` : "8%";
-        must<HTMLElement>("llcaGaugeFill").style.width = snapshot.adas.lcaActive ? "100%" : snapshot.adas.autoArmed ? "54%" : "8%";
+        updateDicIndicators(snapshot);
         must("dic").textContent = snapshot.dicMessage;
         must("scoreReadout").textContent = fixed(snapshot.metrics.totalScore, 1);
         must("sdlpReadout").textContent = `${fixed(snapshot.metrics.sdlp, 3)} M`;
@@ -321,6 +396,115 @@ function must<T extends HTMLElement = HTMLElement>(id: string): T {
 
 function setActive(selector: string, active: HTMLElement): void {
   document.querySelectorAll(selector).forEach((node) => node.classList.toggle("active", node === active));
+}
+
+function updateDicIndicators(snapshot: SimSnapshot): void {
+  const l2Active = snapshot.adas.mode === "l2";
+  const l3Active = snapshot.adas.mode === "l3";
+  const l2Available = snapshot.road.scene === "l2";
+  const l3Available = snapshot.road.scene === "l3";
+  const l2State = l2Active ? "l2-active" : l2Available ? "ready" : snapshot.adas.autoArmed ? "armed" : "off";
+  const l3State = l3Active ? "l3-active" : l3Available ? "ready" : snapshot.adas.autoArmed ? "armed" : "off";
+  const accSetSpeed = Math.round(snapshot.adas.setSpeedMph);
+  const accGauge = must<HTMLElement>("accGauge");
+
+  must<HTMLElement>("dicIndicatorRow").classList.toggle("l3-active", l3Active);
+  accGauge.classList.toggle("with-speed", snapshot.adas.accActive);
+  must<HTMLElement>("accGaugeLabel").textContent = snapshot.adas.accActive ? `ACC ${accSetSpeed}` : "ACC";
+  setIndicatorState(accGauge, snapshot.adas.accActive ? "active" : "off");
+  setIndicatorState(must<HTMLElement>("l2Gauge"), l2State);
+  setIndicatorState(must<HTMLElement>("l3Gauge"), l3State);
+  accGauge.setAttribute("title", snapshot.adas.accActive ? `ACC set to ${accSetSpeed} mph` : "ACC off");
+  must("l2Gauge").setAttribute("title", l2Active ? "L2 active" : l2Available ? "L2 available" : snapshot.adas.autoArmed ? "L2 armed, unavailable" : "L2 off");
+  must("l3Gauge").setAttribute("title", l3Active ? "L3 active" : l3Available ? "L3 available" : snapshot.adas.autoArmed ? "L3 armed, unavailable" : "L3 off");
+}
+
+function setIndicatorState(element: HTMLElement, state: "off" | "armed" | "ready" | "active" | "l2-active" | "l3-active"): void {
+  element.classList.remove("armed", "ready", "active", "l2-active", "l3-active");
+  if (state !== "off") element.classList.add(state);
+}
+
+function setupGamepadMappingControls(actions: UiActions): void {
+  const axisControls: Array<[keyof GamepadMapping, string]> = [
+    ["steerAxis", "gamepadSteerAxis"],
+    ["acceleratorAxis", "gamepadAccelAxis"],
+    ["brakeAxis", "gamepadBrakeAxis"]
+  ];
+  const buttonControls: Array<[keyof GamepadMapping, string]> = [
+    ["accButton", "gamepadAccButton"],
+    ["lcaButton", "gamepadLcaButton"]
+  ];
+
+  axisControls.forEach(([, id]) => populateSelect(must<HTMLSelectElement>(id), "Axis", 8));
+  buttonControls.forEach(([, id]) => populateSelect(must<HTMLSelectElement>(id), "Button", 16));
+
+  const writeMappingToUi = (mapping: GamepadMapping) => {
+    [...axisControls, ...buttonControls].forEach(([key, id]) => {
+      must<HTMLSelectElement>(id).value = String(mapping[key]);
+    });
+  };
+
+  const readMappingFromUi = (): Partial<GamepadMapping> => {
+    const mapping: Partial<GamepadMapping> = {};
+    [...axisControls, ...buttonControls].forEach(([key, id]) => {
+      mapping[key] = Number(must<HTMLSelectElement>(id).value);
+    });
+    return mapping;
+  };
+
+  writeMappingToUi(actions.getGamepadMapping());
+  [...axisControls, ...buttonControls].forEach(([, id]) => {
+    must<HTMLSelectElement>(id).addEventListener("change", () => actions.onGamepadMappingChange(readMappingFromUi()));
+  });
+  must("gamepadReset").addEventListener("click", () => writeMappingToUi(actions.onGamepadMappingReset()));
+}
+
+function setupPhysicsToggle(): void {
+  const toggle = must<HTMLButtonElement>("physicsToggle");
+  const body = must<HTMLElement>("physicsBody");
+  const label = must<HTMLElement>("physicsToggleText");
+  toggle.addEventListener("click", () => {
+    const open = body.hidden;
+    body.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    label.textContent = open ? "Close" : "Open";
+  });
+}
+
+function populateSelect(select: HTMLSelectElement, label: string, count: number): void {
+  select.innerHTML = Array.from({ length: count }, (_, index) => `<option value="${index}">${label} ${index}</option>`).join("");
+}
+
+function updateLogPreview(snapshot: SimSnapshot): void {
+  must("logTotalScore").textContent = fixed(snapshot.metrics.totalScore, 1);
+  must("logSteeringPoints").textContent = fixed(snapshot.metrics.steeringPoints, 1);
+  must("logOffRoadPenalty").textContent = penaltyText(snapshot.metrics.offRoadPenalty);
+  must("logCrashPenalty").textContent = penaltyText(snapshot.metrics.crashPenaltyTotal);
+  must("logSdlp").textContent = `${fixed(snapshot.metrics.sdlp, 3)} M`;
+  must("logDuration").textContent = formatTime(snapshot.session.elapsed);
+  must("logDistance").textContent = `${fixed(snapshot.vehicle.distanceM, 1)} M`;
+
+  const crashList = must<HTMLElement>("logCrashList");
+  crashList.replaceChildren();
+  if (!snapshot.crashes.length) {
+    crashList.textContent = "No crashes recorded";
+    return;
+  }
+
+  snapshot.crashes.forEach((crash) => {
+    const row = document.createElement("div");
+    row.className = "log-crash-row";
+    const title = document.createElement("strong");
+    title.textContent = `#${crash.index} ${crash.type.toUpperCase()} ${fixed(crash.mph, 1)} MPH`;
+    const detail = document.createElement("span");
+    detail.textContent = `${formatTime(crash.time)} | ${crash.side} | ${crash.zone}`;
+    row.append(title, detail);
+    crashList.append(row);
+  });
+}
+
+function penaltyText(value: number): string {
+  return value > 0 ? `-${fixed(value, 1)}` : "0.0";
 }
 
 function drawLaneViz(canvas: HTMLCanvasElement, snapshot: SimSnapshot): void {

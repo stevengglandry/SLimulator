@@ -35,6 +35,29 @@ describe("ADAS controllers", () => {
     expect(controls.steer).toBeLessThanOrEqual(1);
   });
 
+  it("lets driver accelerator temporarily override ACC without disabling speed recovery", () => {
+    const adas: AdasState = { accActive: true, lcaActive: false, autoArmed: false, setSpeedMps: 12, assistSteerAngle: 0 };
+    const override = mergeControls({ steer: 0, accelerator: 0.85, brake: 0 }, adas, pose, lane, "l2");
+    expect(override.accelerator).toBeCloseTo(0.85);
+    expect(override.brake).toBe(0);
+    expect(adas.accActive).toBe(true);
+
+    const recovered = mergeControls({ steer: 0, accelerator: 0, brake: 0 }, adas, pose, lane, "l2");
+    expect(recovered.accelerator).toBe(0);
+    expect(recovered.brake).toBeGreaterThan(0);
+    expect(adas.accActive).toBe(true);
+  });
+
+  it("keeps LCA steering while driver accelerator overrides ACC", () => {
+    const adas: AdasState = { accActive: true, lcaActive: true, autoArmed: false, setSpeedMps: 12, assistSteerAngle: 0 };
+    const controls = mergeControls({ steer: 0, accelerator: 1, brake: 0 }, adas, pose, lane, "l3");
+    expect(controls.accelerator).toBe(1);
+    expect(controls.brake).toBe(0);
+    expect(Math.abs(controls.steer)).toBeGreaterThan(0);
+    expect(adas.accActive).toBe(true);
+    expect(adas.lcaActive).toBe(true);
+  });
+
   it("keeps the v5 speed-dependent manual steering shape", () => {
     expect(manualSteerLimit(0)).toBeCloseTo(0.52);
     expect(manualSteerLimit(35.8)).toBeLessThan(0.2);

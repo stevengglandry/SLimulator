@@ -1,28 +1,55 @@
 import type { Controls } from "../game/types";
 import { clamp } from "../shared/math";
 
+export type InputSampleMode = "local" | "gamepad";
+
+export type GamepadMapping = {
+  steerAxis: number;
+  acceleratorAxis: number;
+  brakeAxis: number;
+  accButton: number;
+  lcaButton: number;
+  deadzone: number;
+  steerGain: number;
+};
+
 type ButtonLatch = {
   acc: boolean;
   lca: boolean;
 };
 
+type InputManagerOptions = {
+  now?: () => number;
+};
+
+const KEYBOARD_STEER_TURN_RATE = 1.35;
+const KEYBOARD_STEER_CENTER_RATE = 1.3;
+const MAX_KEYBOARD_STEER_DT = 0.08;
+const GAMEPAD_MAPPING_STORAGE_KEY = "slimulator-gamepad-mapping";
+const DEFAULT_GAMEPAD_MAPPING: GamepadMapping = {
+  steerAxis: 0,
+  acceleratorAxis: 5,
+  brakeAxis: 2,
+  accButton: 0,
+  lcaButton: 1,
+  deadzone: 0.08,
+  steerGain: 0.75
+};
+
 export class InputManager {
   private readonly keys = new Set<string>();
   private readonly latches: ButtonLatch = { acc: false, lca: false };
-  private readonly gamepadMapping = {
-    steerAxis: 0,
-    acceleratorAxis: 5,
-    brakeAxis: 2,
-    accButton: 0,
-    lcaButton: 1,
-    deadzone: 0.08,
-    steerGain: 0.75
-  };
+  private readonly now: () => number;
+  private gamepadMapping: GamepadMapping = { ...DEFAULT_GAMEPAD_MAPPING };
 
   public readonly touchControls = { steer: 0, accelerator: 0, brake: 0 };
   private touchOverlay: HTMLDivElement | null = null;
+  private keyboardSteer = 0;
+  private lastKeyboardSteerSampleMs: number | null = null;
 
-  constructor(private readonly target: HTMLElement | Window = window) {
+  constructor(private readonly target: EventTarget = window, options: InputManagerOptions = {}) {
+    this.now = options.now ?? (() => performance.now());
+    this.gamepadMapping = this.loadGamepadMapping();
     target.addEventListener("keydown", this.onKeyDown as EventListener);
     target.addEventListener("keyup", this.onKeyUp as EventListener);
     if (this.isTouchDevice()) {
@@ -39,7 +66,9 @@ export class InputManager {
     }
   }
 
-  sample(): Controls {
+  sample(mode: InputSampleMode = "local"): Controls {
+    if (mode === "gamepad") return this.gamepadControls();
+
     const keyboard = this.keyboardControls();
     const gamepad = this.gamepadControls();
     const touch = this.touchControls;
@@ -56,8 +85,26 @@ export class InputManager {
     return { steer, accelerator, brake, accButton, lcaButton };
   }
 
+  getGamepadMapping(): GamepadMapping {
+    return { ...this.gamepadMapping };
+  }
+
+  setGamepadMapping(mapping: Partial<GamepadMapping>): void {
+    this.gamepadMapping = normalizeGamepadMapping({ ...this.gamepadMapping, ...mapping });
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(GAMEPAD_MAPPING_STORAGE_KEY, JSON.stringify(this.gamepadMapping));
+    }
+  }
+
+  resetGamepadMapping(): GamepadMapping {
+    this.gamepadMapping = { ...DEFAULT_GAMEPAD_MAPPING };
+    if (typeof localStorage !== "undefined") localStorage.removeItem(GAMEPAD_MAPPING_STORAGE_KEY);
+    return this.getGamepadMapping();
+  }
+
   private isTouchDevice(): boolean {
-    return ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+    return (typeof window !== "undefined" && "ontouchstart" in window) ||
+      (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0);
   }
 
   private createTouchOverlay(): void {
@@ -115,24 +162,53 @@ export class InputManager {
   }
 
   liveGamepadLabel(): string {
+    if (typeof navigator === "undefined") return "No gamepad";
     const pad = navigator.getGamepads?.().find(Boolean);
     if (!pad) return "No gamepad";
+    const controls = this.gamepadControls();
     const axes = pad.axes.map((axis, i) => `A${i}:${axis.toFixed(2)}`).join(" ");
-    const buttons = pad.buttons.map((button, i) => (button.pressed ? `B${i}` : "")).filter(Boolean).join(" ");
-    return `${pad.id}\n${axes}${buttons ? `\n${buttons}` : ""}`;
+    const buttons = pad.buttons
+      .map((button, i) => (button.pressed || button.value > 0.02 ? `B${i}:${button.value.toFixed(2)}` : ""))
+      .filter(Boolean)
+      .join(" ");
+    return [
+      pad.id,
+      `Mapped steer:${controls.steer.toFixed(2)} acc:${controls.accelerator.toFixed(2)} brake:${controls.brake.toFixed(2)} ACC:${controls.accButton ? "on" : "off"} LCA:${controls.lcaButton ? "on" : "off"}`,
+      `Axes ${axes}`,
+      buttons ? `Buttons ${buttons}` : "Buttons none"
+    ].join("\n");
+  }
+
+  private loadGamepadMapping(): GamepadMapping {
+    if (typeof localStorage === "undefined") return { ...DEFAULT_GAMEPAD_MAPPING };
+    try {
+      const saved = JSON.parse(localStorage.getItem(GAMEPAD_MAPPING_STORAGE_KEY) || "{}") as Partial<GamepadMapping>;
+      return normalizeGamepadMapping({ ...DEFAULT_GAMEPAD_MAPPING, ...saved });
+    } catch {
+      return { ...DEFAULT_GAMEPAD_MAPPING };
+    }
   }
 
   private keyboardControls(): Controls {
     const left = this.keys.has("KeyA") || this.keys.has("ArrowLeft");
     const right = this.keys.has("KeyD") || this.keys.has("ArrowRight");
+    const targetSteer = (right ? 1 : 0) - (left ? 1 : 0);
+    const now = this.now();
+    const previous = this.lastKeyboardSteerSampleMs ?? now;
+    const dt = clamp((now - previous) / 1000, 0, MAX_KEYBOARD_STEER_DT);
+    const rate = targetSteer === 0 ? KEYBOARD_STEER_CENTER_RATE : KEYBOARD_STEER_TURN_RATE;
+    this.lastKeyboardSteerSampleMs = now;
+    this.keyboardSteer = moveToward(this.keyboardSteer, targetSteer, rate * dt);
+
     return {
-      steer: (right ? 1 : 0) - (left ? 1 : 0),
+      steer: this.keyboardSteer,
       accelerator: this.keys.has("KeyW") ? 1 : 0,
       brake: this.keys.has("KeyS") || this.keys.has("Space") ? 1 : 0
     };
   }
 
   private gamepadControls(): Controls {
+    if (typeof navigator === "undefined") return { steer: 0, accelerator: 0, brake: 0 };
     const pad = navigator.getGamepads?.().find(Boolean);
     if (!pad) return { steer: 0, accelerator: 0, brake: 0 };
     const map = this.gamepadMapping;
@@ -170,4 +246,26 @@ export class InputManager {
 function axisPedal(axis: number | undefined): number {
   if (!Number.isFinite(axis)) return 0;
   return clamp(((axis as number) + 1) / 2, 0, 1);
+}
+
+function moveToward(current: number, target: number, maxDelta: number): number {
+  const delta = target - current;
+  if (Math.abs(delta) <= maxDelta) return target;
+  return current + Math.sign(delta) * maxDelta;
+}
+
+function normalizeGamepadMapping(mapping: GamepadMapping): GamepadMapping {
+  return {
+    steerAxis: clampIndex(mapping.steerAxis),
+    acceleratorAxis: clampIndex(mapping.acceleratorAxis),
+    brakeAxis: clampIndex(mapping.brakeAxis),
+    accButton: clampIndex(mapping.accButton),
+    lcaButton: clampIndex(mapping.lcaButton),
+    deadzone: clamp(Number(mapping.deadzone) || DEFAULT_GAMEPAD_MAPPING.deadzone, 0, 0.5),
+    steerGain: clamp(Number(mapping.steerGain) || DEFAULT_GAMEPAD_MAPPING.steerGain, 0.1, 1.5)
+  };
+}
+
+function clampIndex(value: number): number {
+  return Math.max(0, Math.min(31, Math.round(Number(value) || 0)));
 }

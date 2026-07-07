@@ -4,7 +4,7 @@ import type { PerfSnapshot } from "./diagnostics/perf";
 import { PerfTracker } from "./diagnostics/perf";
 import { VERSION } from "./game/config";
 import { Simulator } from "./game/simulator";
-import type { CameraMode, Controls, ExpectedAction, RenderQuality, SceneKey } from "./game/types";
+import type { CameraMode, Controls, DriverInputSource, ExpectedAction, RenderQuality, SceneKey } from "./game/types";
 import { InputManager } from "./input/inputManager";
 import { WorldRenderer } from "./render/WorldRenderer";
 import { createUi } from "./ui/uiController";
@@ -32,8 +32,8 @@ async function boot(): Promise<void> {
       simulator.requestScene(scene);
       audio.resume();
     },
-    onNewSession(subId) {
-      simulator.newSession({ subId });
+    onNewSession() {
+      simulator.newSession();
       audio.resume();
       ui.toast("Session reset");
     },
@@ -47,10 +47,10 @@ async function boot(): Promise<void> {
     },
     onInputSource(source) {
       simulator.setInputSource(source);
-      ui.toast(source === "local" ? "Local controls" : "External controls");
+      ui.toast(source === "local" ? "Local controls" : source === "gamepad" ? "Gamepad controls" : "External controls");
     },
-    onAlert(type, expectedAction) {
-      simulator.triggerAlert({ type, expectedAction: expectedAction as ExpectedAction });
+    onAlert(type) {
+      simulator.triggerAlert({ type });
       audio.alert(type);
     },
     onCamera(mode) {
@@ -63,6 +63,15 @@ async function boot(): Promise<void> {
     },
     onPhysicsChange(key, value) {
       simulator.physics.setParam(key, value);
+    },
+    onGamepadMappingChange(mapping) {
+      input.setGamepadMapping(mapping);
+    },
+    onGamepadMappingReset() {
+      return input.resetGamepadMapping();
+    },
+    getGamepadMapping() {
+      return input.getGamepadMapping();
     }
   });
 
@@ -88,7 +97,7 @@ async function boot(): Promise<void> {
     requestScene: (scene: SceneKey, transitionMs?: number) => simulator.requestScene(scene, transitionMs),
     newSession: (options = {}) => simulator.newSession(options),
     setDriverControls: (controls: Partial<Controls>) => simulator.setExternalControls(controls),
-    setInputSource: (source: "local" | "external") => simulator.setInputSource(source),
+    setInputSource: (source: DriverInputSource) => simulator.setInputSource(source),
     toggleACC: () => simulator.toggleACC(),
     toggleLCA: () => simulator.toggleLCA(),
     triggerAlert: (options = {}) => simulator.triggerAlert({ ...options, expectedAction: options.expectedAction as ExpectedAction | undefined }),
@@ -98,7 +107,7 @@ async function boot(): Promise<void> {
   let lastSnapshot = simulator.snapshot();
   function frame(now: number): void {
     const dt = perf.mark(now);
-    const controls = perf.measure("input", () => input.sample());
+    const controls = perf.measure("input", () => input.sample(simulator.inputSource === "gamepad" ? "gamepad" : "local"));
     if (now - lastGamepadSampleMs >= 250) {
       lastGamepadLabel = perf.measure("input", () => input.liveGamepadLabel());
       lastGamepadSampleMs = now;

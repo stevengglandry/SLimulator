@@ -1,5 +1,5 @@
 import { VERSION, config, MPH_PER_MPS, MPS_PER_MPH, SCENES } from "./config";
-import { computeAccPedals, mergeControls } from "./controllers";
+import { mergeControls } from "./controllers";
 import { RoadModel } from "./route";
 import type {
   AdasState,
@@ -9,6 +9,7 @@ import type {
   Controls,
   CrashRecord,
   CrashState,
+  DriverInputSource,
   DriveMode,
   ExpectedAction,
   MetricsState,
@@ -52,7 +53,7 @@ export class Simulator {
   readonly road: RoadModel;
   readonly physics: VehiclePhysics;
 
-  inputSource: "local" | "external" = "local";
+  inputSource: DriverInputSource = "local";
   externalControls: Controls = { steer: 0, accelerator: 0, brake: 0 };
   session: SessionState = { subId: "", started: false, status: "idle", elapsed: 0, startedAt: null };
   adas: AdasState = { accActive: false, lcaActive: false, autoArmed: false, setSpeedMps: 0, assistSteerAngle: 0 };
@@ -126,7 +127,7 @@ export class Simulator {
     return snapshot;
   }
 
-  setInputSource(source: "local" | "external"): void {
+  setInputSource(source: DriverInputSource): void {
     this.inputSource = source;
     publish("event", { type: "input-source", source }, false);
   }
@@ -308,11 +309,6 @@ export class Simulator {
     const lane = this.road.nearestLane(before.lateral);
     if (this.crashState) driver = { steer: 0, accelerator: 0, brake: 1 };
 
-    if (this.adas.accActive && !this.adas.lcaActive) {
-      const pedals = computeAccPedals(before.speedMps, this.adas.setSpeedMps, driver.brake);
-      driver.accelerator = pedals.accelerator;
-      driver.brake = pedals.brake;
-    }
     const applied = this.crashState ? { steer: 0, accelerator: 0, brake: 1 } : mergeControls(driver, this.adas, before, lane, this.road.scene);
     this.currentControls = applied;
     this.previousPose = { ...before };
