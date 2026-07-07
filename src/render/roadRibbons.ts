@@ -214,16 +214,16 @@ export class RoadRibbonSystem {
       if (ribbonIdx < this.laneLines.length) {
         const lineL = this.laneLines[ribbonIdx++];
         lineL.line.visible = true;
-        lineL.line.material.opacity = 0.7 * dividerAlpha;
-        this.updateGuardrailLine(lineL, guardrailSamples, guardrailSettings.sampleCount, offsetL, 0.086, snapshot.vehicle.roadPositionM, (s) => this.road.laneFloat(s) > dividerThreshold + 0.03);
+        lineL.line.material.opacity = 0.86 * dividerAlpha;
+        this.updateGuardrailLine(lineL, guardrailSamples, guardrailSettings.sampleCount, offsetL, 0.108, snapshot.vehicle.roadPositionM, (s) => this.road.laneFloat(s) > dividerThreshold + 0.03);
       }
       // Right side lane divider
       const offsetR = config.laneWidth * (i + 1);
       if (ribbonIdx < this.laneLines.length) {
         const lineR = this.laneLines[ribbonIdx++];
         lineR.line.visible = true;
-        lineR.line.material.opacity = 0.7 * dividerAlpha;
-        this.updateGuardrailLine(lineR, guardrailSamples, guardrailSettings.sampleCount, offsetR, 0.086, snapshot.vehicle.roadPositionM, (s) => this.road.laneFloat(s) > dividerThreshold + 0.03);
+        lineR.line.material.opacity = 0.86 * dividerAlpha;
+        this.updateGuardrailLine(lineR, guardrailSamples, guardrailSettings.sampleCount, offsetR, 0.108, snapshot.vehicle.roadPositionM, (s) => this.road.laneFloat(s) > dividerThreshold + 0.03);
       }
     }
   }
@@ -281,14 +281,14 @@ export class RoadRibbonSystem {
     });
     const laneDivider = new LineMaterial({
       color: 0xffffff,
-      linewidth: 0.095,
+      linewidth: 0.12,
       worldUnits: true,
       vertexColors: true,
       dashed: true,
       dashSize: LANE_DASH_SIZE_M,
       gapSize: LANE_DASH_GAP_M,
       transparent: true,
-      opacity: 0.7,
+      opacity: 0.86,
       alphaToCoverage: true,
       depthWrite: false
     });
@@ -409,6 +409,9 @@ export class RoadRibbonSystem {
     line.name = name;
     line.frustumCulled = false;
     line.renderOrder = options.renderOrder ?? 2;
+    const dashed = options.dashed ?? false;
+    if (material.dashed !== dashed) material.dashed = dashed;
+    if (dashed) line.computeLineDistances();
     this.scene.add(line);
     return {
       line,
@@ -528,7 +531,10 @@ export class RoadRibbonSystem {
     }
     line.geometry.setPositions(line.positions.subarray(0, count * 3));
     if (line.colors) line.geometry.setColors(line.colors.subarray(0, count * 3));
-    if (line.dashed) line.line.computeLineDistances();
+    if (line.dashed) {
+      if (!line.line.material.dashed) line.line.material.dashed = true;
+      line.line.computeLineDistances();
+    }
   }
 
   private updateLaneDashPhase(sampleBaseM: number): void {

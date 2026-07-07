@@ -111,15 +111,15 @@ function createBillboardTexture(text: string, seed: number): CanvasTexture {
   canvas.height = 256;
   const ctx = canvas.getContext("2d")!;
   const hue = Math.floor(170 + hash01(seed) * 180);
-  ctx.fillStyle = `hsl(${hue}, 68%, 42%)`;
+  ctx.fillStyle = `hsl(${hue}, 44%, 34%)`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "rgba(255,255,255,0.16)";
+  ctx.fillStyle = "rgba(255,255,255,0.09)";
   ctx.fillRect(0, 0, canvas.width, 42);
   ctx.fillRect(0, canvas.height - 34, canvas.width, 34);
-  ctx.strokeStyle = "#f4fbff";
-  ctx.lineWidth = 14;
+  ctx.strokeStyle = "#c9d8d4";
+  ctx.lineWidth = 10;
   ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = "#d9e8e3";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.font = "700 54px system-ui, sans-serif";
@@ -165,14 +165,14 @@ function createTransitionSignTexture(label: string): CanvasTexture {
   const ctx = canvas.getContext("2d")!;
   const lines = label.split("\n");
 
-  ctx.fillStyle = "#123f45";
+  ctx.fillStyle = "#163b3f";
   roundRect(ctx, 16, 16, canvas.width - 32, canvas.height - 32, 18);
   ctx.fill();
-  ctx.strokeStyle = "#e9fbf6";
-  ctx.lineWidth = 10;
+  ctx.strokeStyle = "#c7d7d2";
+  ctx.lineWidth = 8;
   roundRect(ctx, 16, 16, canvas.width - 32, canvas.height - 32, 18);
   ctx.stroke();
-  ctx.fillStyle = "#e9fbf6";
+  ctx.fillStyle = "#d3e1dd";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.font = "900 54px system-ui, sans-serif";
@@ -320,8 +320,9 @@ export class ScenerySystem {
     this.transitionSignPosts = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x6f8b88 }), 8, true);
     this.billboardMaterials = BILLBOARD_PHRASES.map((phrase, index) => new MeshBasicMaterial({
       map: createBillboardTexture(phrase, this.road.seed + index * 127.3),
+      color: 0xb5c2be,
       side: DoubleSide,
-      fog: false
+      fog: true
     }));
     this.speedSignMaterials = new Map(SPEED_SIGN_LIMITS.map((limit) => [limit, new MeshBasicMaterial({
       map: createSpeedLimitTexture(limit),
@@ -892,6 +893,7 @@ export class ScenerySystem {
     if (existing) return existing;
     const material = new MeshBasicMaterial({
       map: createTransitionSignTexture(label),
+      color: 0xc1ccc8,
       side: DoubleSide,
       fog: true
     });
