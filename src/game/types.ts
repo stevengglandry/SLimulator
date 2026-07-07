@@ -21,6 +21,7 @@ export interface SceneConfig {
   buildingScale: number;
   buildingSetback: number;
   skylineDensity: number;
+  speedLimitMph: number;
 }
 
 export interface Controls {
@@ -83,7 +84,9 @@ export interface RoadTransition {
   from: SceneKey;
   to: SceneKey;
   progress: number;
-  duration: number;
+  originS: number;
+  taperStartS: number;
+  lockS: number;
 }
 
 export interface AdasState {
@@ -179,7 +182,7 @@ export interface SimSnapshot {
     requestedScene: SceneKey;
     lanesPerDirection: number;
     transition: RoadTransition | null;
-    queue: Array<{ target: SceneKey; transitionMs: number }>;
+    queue: Array<{ target: SceneKey }>;
     seed: number;
     bounds: RoadBounds;
     lane: LaneInfo;

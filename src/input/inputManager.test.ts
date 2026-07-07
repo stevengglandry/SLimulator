@@ -110,12 +110,74 @@ describe("InputManager", () => {
     });
     const { manager } = createManager();
 
-    manager.setGamepadMapping({ steerAxis: 1, accButton: 3, lcaButton: 1 });
+    manager.setGamepadMapping({
+      steer: { kind: "axis", index: 1 },
+      acc: { kind: "button", index: 3 },
+      lca: { kind: "button", index: 1 }
+    });
     const controls = manager.sample("gamepad");
 
     expect(controls.steer).toBeCloseTo(-0.6);
     expect(controls.accButton).toBe(true);
     expect(controls.lcaButton).toBe(true);
+
+    manager.dispose();
+  });
+
+  it("allows accelerator and brake to be mapped to buttons", () => {
+    vi.stubGlobal("navigator", {
+      maxTouchPoints: 0,
+      getGamepads: () => [{
+        id: "test-pad",
+        axes: [0, 0, 0, 0, 0, -1],
+        buttons: [
+          { pressed: false, value: 0 },
+          { pressed: false, value: 0 },
+          { pressed: true, value: 1 },
+          { pressed: false, value: 0.8 }
+        ]
+      } as unknown as Gamepad]
+    });
+    const { manager } = createManager();
+
+    manager.setGamepadMapping({
+      accelerator: { kind: "button", index: 2 },
+      brake: { kind: "button", index: 3 }
+    });
+    const controls = manager.sample("gamepad");
+
+    expect(controls.accelerator).toBe(1);
+    expect(controls.brake).toBe(1);
+
+    manager.dispose();
+  });
+
+  it("migrates old saved numeric gamepad mappings", () => {
+    const saved = JSON.stringify({
+      steerAxis: 1,
+      acceleratorAxis: 4,
+      brakeAxis: 3,
+      accButton: 2,
+      lcaButton: 5,
+      deadzone: 0.12,
+      steerGain: 0.9
+    });
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => key === "slimulator-gamepad-mapping" ? saved : null,
+      setItem: vi.fn(),
+      removeItem: vi.fn()
+    });
+
+    const { manager } = createManager();
+    const mapping = manager.getGamepadMapping();
+
+    expect(mapping.steer).toEqual({ kind: "axis", index: 1, invert: false });
+    expect(mapping.accelerator).toEqual({ kind: "axis", index: 4, invert: false });
+    expect(mapping.brake).toEqual({ kind: "axis", index: 3, invert: false });
+    expect(mapping.acc).toEqual({ kind: "button", index: 2 });
+    expect(mapping.lca).toEqual({ kind: "button", index: 5 });
+    expect(mapping.deadzone).toBe(0.12);
+    expect(mapping.steerGain).toBe(0.9);
 
     manager.dispose();
   });

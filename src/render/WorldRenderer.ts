@@ -123,7 +123,7 @@ export class WorldRenderer {
 
   render(snapshot: SimSnapshot, now: number, perf?: PerfRecorder): void {
     const timeSeconds = now * 0.001;
-    this.measure(perf, "atmosphere", () => this.atmosphere.update(snapshot));
+    this.measure(perf, "atmosphere", () => this.atmosphere.update(snapshot, timeSeconds));
     this.measure(perf, "road", () => this.roadRibbons.update(snapshot));
     this.measure(perf, "scenery", () => this.scenery.update(snapshot, timeSeconds));
     this.measure(perf, "vehicle", () => this.vehicleVisual.update(snapshot, timeSeconds));

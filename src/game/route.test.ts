@@ -3,14 +3,19 @@ import { config } from "./config";
 import { RoadModel } from "./route";
 
 describe("RoadModel", () => {
-  it("blends lane counts through scene transitions", () => {
+  it("streams requested scenes from ahead and locks after the handoff distance", () => {
     const road = new RoadModel(123);
     expect(road.laneCount()).toBe(1);
-    road.requestScene("l3", config.transitionMs);
-    road.update(5);
-    expect(road.laneFloat()).toBeGreaterThan(1);
-    expect(road.laneFloat()).toBeLessThan(3);
-    road.update(5);
+    road.requestScene("l3", undefined, 100);
+    expect(road.transition?.originS).toBe(100);
+    expect(road.scenerySceneAt(120)).toBe("unmapped");
+    expect(road.scenerySceneAt(100 + config.sceneTransitionLeadM + 1)).toBe("l3");
+    expect(road.laneFloat(120)).toBe(1);
+    expect(road.laneFloat(100 + config.sceneTransitionLeadM + config.sceneTransitionTaperM * 0.5)).toBeGreaterThan(1);
+    expect(road.laneFloat(100 + config.sceneTransitionLeadM + config.sceneTransitionTaperM * 0.5)).toBeLessThan(3);
+    road.update(1, 100 + config.sceneTransitionLeadM + config.sceneTransitionTaperM - 1);
+    expect(road.scene).toBe("unmapped");
+    road.update(1, 100 + config.sceneTransitionLeadM + config.sceneTransitionTaperM + 1);
     expect(road.scene).toBe("l3");
     expect(road.laneCount()).toBe(3);
   });

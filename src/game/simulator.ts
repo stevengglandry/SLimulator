@@ -140,11 +140,12 @@ export class Simulator {
     };
   }
 
-  requestScene(scene: SceneKey, transitionMs: number = config.transitionMs): void {
-    const result = this.road.requestScene(scene, transitionMs);
+  requestScene(scene: SceneKey, transitionMs?: number): void {
+    const pose = this.physics.pose(this.road);
+    const result = this.road.requestScene(scene, transitionMs, pose.s);
     if (result === "started") {
       this.setDIC(`TRANSITION - ${SCENES[scene].label}`, 3);
-      publish("event", { type: "scene-transition-start", from: this.road.scene, to: scene, durationMs: transitionMs }, false);
+      publish("event", { type: "scene-transition-start", from: this.road.scene, to: scene }, false);
     } else if (result === "queued") {
       this.setDIC(`QUEUED - ${SCENES[scene].label}`, 2.4);
       publish("event", { type: "scene-transition-queued", to: scene, queue: [...this.road.queue] }, false);
@@ -221,7 +222,7 @@ export class Simulator {
   snapshot(interpolate = false): SimSnapshot {
     const physicsPose = this.physics.pose(this.road);
     const pose = interpolate ? this.interpolatedPose(physicsPose) : physicsPose;
-    const lane = this.road.nearestLane(pose.lateral);
+    const lane = this.road.nearestLane(pose.lateral, pose.s);
     return {
       version: VERSION,
       session: { ...this.session, seed: this.road.seed },
@@ -241,7 +242,7 @@ export class Simulator {
       road: {
         scene: this.road.scene,
         requestedScene: this.road.requestedScene(),
-        lanesPerDirection: this.road.laneCount(),
+        lanesPerDirection: this.road.laneCount(pose.s),
         transition: this.road.transition ? { ...this.road.transition } : null,
         queue: this.road.queue.map((item) => ({ ...item })),
         seed: this.road.seed,
@@ -283,12 +284,13 @@ export class Simulator {
   }
 
   private stepFixed(dt: number, localControls: Controls, perf?: PerfRecorder): void {
-    const transition = this.road.update(dt);
+    const transitionPose = this.physics.pose(this.road);
+    const transition = this.road.update(dt, transitionPose.s);
     if (transition.completed) {
       this.finishSceneTransition(transition.completed.from, transition.completed.to);
     }
     if (transition.started) {
-      publish("event", { type: "scene-transition-start", from: this.road.scene, to: transition.started, durationMs: config.transitionMs }, false);
+      publish("event", { type: "scene-transition-start", from: this.road.scene, to: transition.started }, false);
     }
 
     let driver = this.inputSource === "external" ? { ...this.externalControls } : { ...localControls };
@@ -306,7 +308,7 @@ export class Simulator {
     if (this.session.started) this.session.elapsed += dt;
 
     const before = this.physics.pose(this.road);
-    const lane = this.road.nearestLane(before.lateral);
+    const lane = this.road.nearestLane(before.lateral, before.s);
     if (this.crashState) driver = { steer: 0, accelerator: 0, brake: 1 };
 
     const applied = this.crashState ? { steer: 0, accelerator: 0, brake: 1 } : mergeControls(driver, this.adas, before, lane, this.road.scene);
@@ -350,7 +352,7 @@ export class Simulator {
     const bounds = this.road.boundsAt(pose.s);
     const outOfBounds = pose.lateral < bounds.leftEdge || pose.lateral > bounds.rightEdge;
     if (!this.session.started || pose.speedMps < 2 || outOfBounds) {
-      const lane = this.road.nearestLane(pose.lateral);
+      const lane = this.road.nearestLane(pose.lateral, pose.s);
       this.physics.resetToRoad(this.road, pose.s, lane.center, 0);
       this.currentControls = { steer: 0, accelerator: 0, brake: 0 };
     }
@@ -363,7 +365,7 @@ export class Simulator {
     const mode = this.mode();
     this.metrics.timeByMode[mode] += dt;
     const bounds = this.road.boundsAt(after.s);
-    const lane = this.road.nearestLane(after.lateral);
+    const lane = this.road.nearestLane(after.lateral, after.s);
     const leftTire = after.lateral - config.tireTrack / 2;
     const rightTire = after.lateral + config.tireTrack / 2;
     const offroad = leftTire < bounds.leftEdge || rightTire > bounds.rightEdge;
@@ -446,7 +448,7 @@ export class Simulator {
     this.crashState.stoppedFor += dt;
     this.crashState.phase = pose.speedMps < CRASH_WAITING_SPEED_MPS ? "waiting" : "braking";
     if (this.crashState.stoppedFor >= CRASH_RESET_SECONDS) {
-      const lane = this.road.nearestLane(pose.lateral);
+      const lane = this.road.nearestLane(pose.lateral, pose.s);
       this.physics.resetToRoad(this.road, pose.s, lane.center, 0);
       this.currentControls = { steer: 0, accelerator: 0, brake: 0 };
       this.crashState = null;
@@ -483,7 +485,7 @@ export class Simulator {
   }
 
   private findPedestrianCollision(before: VehiclePose, after: VehiclePose): PedestrianHit | null {
-    if (this.road.sceneValue("crosswalks") <= 0.3) return null;
+    if (this.road.roadValueAt("crosswalks", before.s) <= 0.3 && this.road.roadValueAt("crosswalks", after.s) <= 0.3) return null;
     const pedestrianRadius = config.pedestrianHitRadius;
     const halfVehicleLength = config.vehicleLength / 2;
     const halfVehicleWidth = config.vehicleWidth / 2;

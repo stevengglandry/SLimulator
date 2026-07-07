@@ -3,12 +3,25 @@ import { clamp } from "../shared/math";
 
 export type InputSampleMode = "local" | "gamepad";
 
+export type GamepadAxisBinding = {
+  kind: "axis";
+  index: number;
+  invert?: boolean;
+};
+
+export type GamepadButtonBinding = {
+  kind: "button";
+  index: number;
+};
+
+export type GamepadControlBinding = GamepadAxisBinding | GamepadButtonBinding;
+
 export type GamepadMapping = {
-  steerAxis: number;
-  acceleratorAxis: number;
-  brakeAxis: number;
-  accButton: number;
-  lcaButton: number;
+  steer: GamepadAxisBinding;
+  accelerator: GamepadControlBinding;
+  brake: GamepadControlBinding;
+  acc: GamepadButtonBinding;
+  lca: GamepadButtonBinding;
   deadzone: number;
   steerGain: number;
 };
@@ -27,11 +40,11 @@ const KEYBOARD_STEER_CENTER_RATE = 1.3;
 const MAX_KEYBOARD_STEER_DT = 0.08;
 const GAMEPAD_MAPPING_STORAGE_KEY = "slimulator-gamepad-mapping";
 const DEFAULT_GAMEPAD_MAPPING: GamepadMapping = {
-  steerAxis: 0,
-  acceleratorAxis: 5,
-  brakeAxis: 2,
-  accButton: 0,
-  lcaButton: 1,
+  steer: { kind: "axis", index: 0 },
+  accelerator: { kind: "axis", index: 5 },
+  brake: { kind: "axis", index: 2 },
+  acc: { kind: "button", index: 0 },
+  lca: { kind: "button", index: 1 },
   deadzone: 0.08,
   steerGain: 0.75
 };
@@ -40,7 +53,7 @@ export class InputManager {
   private readonly keys = new Set<string>();
   private readonly latches: ButtonLatch = { acc: false, lca: false };
   private readonly now: () => number;
-  private gamepadMapping: GamepadMapping = { ...DEFAULT_GAMEPAD_MAPPING };
+  private gamepadMapping: GamepadMapping = cloneGamepadMapping(DEFAULT_GAMEPAD_MAPPING);
 
   public readonly touchControls = { steer: 0, accelerator: 0, brake: 0 };
   private touchOverlay: HTMLDivElement | null = null;
@@ -86,18 +99,18 @@ export class InputManager {
   }
 
   getGamepadMapping(): GamepadMapping {
-    return { ...this.gamepadMapping };
+    return cloneGamepadMapping(this.gamepadMapping);
   }
 
   setGamepadMapping(mapping: Partial<GamepadMapping>): void {
-    this.gamepadMapping = normalizeGamepadMapping({ ...this.gamepadMapping, ...mapping });
+    this.gamepadMapping = normalizeGamepadMapping({ ...cloneGamepadMapping(this.gamepadMapping), ...mapping });
     if (typeof localStorage !== "undefined") {
       localStorage.setItem(GAMEPAD_MAPPING_STORAGE_KEY, JSON.stringify(this.gamepadMapping));
     }
   }
 
   resetGamepadMapping(): GamepadMapping {
-    this.gamepadMapping = { ...DEFAULT_GAMEPAD_MAPPING };
+    this.gamepadMapping = cloneGamepadMapping(DEFAULT_GAMEPAD_MAPPING);
     if (typeof localStorage !== "undefined") localStorage.removeItem(GAMEPAD_MAPPING_STORAGE_KEY);
     return this.getGamepadMapping();
   }
@@ -180,12 +193,12 @@ export class InputManager {
   }
 
   private loadGamepadMapping(): GamepadMapping {
-    if (typeof localStorage === "undefined") return { ...DEFAULT_GAMEPAD_MAPPING };
+    if (typeof localStorage === "undefined") return cloneGamepadMapping(DEFAULT_GAMEPAD_MAPPING);
     try {
-      const saved = JSON.parse(localStorage.getItem(GAMEPAD_MAPPING_STORAGE_KEY) || "{}") as Partial<GamepadMapping>;
-      return normalizeGamepadMapping({ ...DEFAULT_GAMEPAD_MAPPING, ...saved });
+      const saved = JSON.parse(localStorage.getItem(GAMEPAD_MAPPING_STORAGE_KEY) || "{}") as unknown;
+      return migrateGamepadMapping(saved);
     } catch {
-      return { ...DEFAULT_GAMEPAD_MAPPING };
+      return cloneGamepadMapping(DEFAULT_GAMEPAD_MAPPING);
     }
   }
 
@@ -212,16 +225,16 @@ export class InputManager {
     const pad = navigator.getGamepads?.().find(Boolean);
     if (!pad) return { steer: 0, accelerator: 0, brake: 0 };
     const map = this.gamepadMapping;
-    const rawSteer = Number.isFinite(pad.axes[map.steerAxis]) ? pad.axes[map.steerAxis] : 0;
+    const rawSteer = readAxisBinding(pad, map.steer);
     const steer = Math.abs(rawSteer) < map.deadzone ? 0 : clamp(rawSteer * map.steerGain, -1, 1);
-    const accelerator = axisPedal(pad.axes[map.acceleratorAxis]);
-    const brake = axisPedal(pad.axes[map.brakeAxis]);
+    const accelerator = readPedalBinding(pad, map.accelerator);
+    const brake = readPedalBinding(pad, map.brake);
     return {
       steer,
       accelerator,
       brake,
-      accButton: Boolean(pad.buttons[map.accButton]?.pressed),
-      lcaButton: Boolean(pad.buttons[map.lcaButton]?.pressed)
+      accButton: readButtonBinding(pad, map.acc),
+      lcaButton: readButtonBinding(pad, map.lca)
     };
   }
 
@@ -248,24 +261,105 @@ function axisPedal(axis: number | undefined): number {
   return clamp(((axis as number) + 1) / 2, 0, 1);
 }
 
+function readAxisBinding(pad: Gamepad, binding: GamepadAxisBinding): number {
+  const value = Number.isFinite(pad.axes[binding.index]) ? pad.axes[binding.index] : 0;
+  return binding.invert ? -value : value;
+}
+
+function readPedalBinding(pad: Gamepad, binding: GamepadControlBinding): number {
+  if (binding.kind === "axis") return axisPedal(readAxisBinding(pad, binding));
+  return readButtonBinding(pad, binding) ? 1 : 0;
+}
+
+function readButtonBinding(pad: Gamepad, binding: GamepadButtonBinding): boolean {
+  const button = pad.buttons[binding.index];
+  return Boolean(button?.pressed || (button?.value ?? 0) > 0.5);
+}
+
 function moveToward(current: number, target: number, maxDelta: number): number {
   const delta = target - current;
   if (Math.abs(delta) <= maxDelta) return target;
   return current + Math.sign(delta) * maxDelta;
 }
 
+function migrateGamepadMapping(saved: unknown): GamepadMapping {
+  if (!isRecord(saved)) return cloneGamepadMapping(DEFAULT_GAMEPAD_MAPPING);
+  if ("steerAxis" in saved || "acceleratorAxis" in saved || "brakeAxis" in saved || "accButton" in saved || "lcaButton" in saved) {
+    return normalizeGamepadMapping({
+      steer: { kind: "axis", index: legacyIndex(saved.steerAxis, DEFAULT_GAMEPAD_MAPPING.steer.index) },
+      accelerator: { kind: "axis", index: legacyIndex(saved.acceleratorAxis, bindingIndex(DEFAULT_GAMEPAD_MAPPING.accelerator)) },
+      brake: { kind: "axis", index: legacyIndex(saved.brakeAxis, bindingIndex(DEFAULT_GAMEPAD_MAPPING.brake)) },
+      acc: { kind: "button", index: legacyIndex(saved.accButton, DEFAULT_GAMEPAD_MAPPING.acc.index) },
+      lca: { kind: "button", index: legacyIndex(saved.lcaButton, DEFAULT_GAMEPAD_MAPPING.lca.index) },
+      deadzone: numberOr(saved.deadzone, DEFAULT_GAMEPAD_MAPPING.deadzone),
+      steerGain: numberOr(saved.steerGain, DEFAULT_GAMEPAD_MAPPING.steerGain)
+    });
+  }
+  return normalizeGamepadMapping({ ...cloneGamepadMapping(DEFAULT_GAMEPAD_MAPPING), ...(saved as Partial<GamepadMapping>) });
+}
+
 function normalizeGamepadMapping(mapping: GamepadMapping): GamepadMapping {
   return {
-    steerAxis: clampIndex(mapping.steerAxis),
-    acceleratorAxis: clampIndex(mapping.acceleratorAxis),
-    brakeAxis: clampIndex(mapping.brakeAxis),
-    accButton: clampIndex(mapping.accButton),
-    lcaButton: clampIndex(mapping.lcaButton),
+    steer: normalizeAxisBinding(mapping.steer, DEFAULT_GAMEPAD_MAPPING.steer),
+    accelerator: normalizeControlBinding(mapping.accelerator, DEFAULT_GAMEPAD_MAPPING.accelerator),
+    brake: normalizeControlBinding(mapping.brake, DEFAULT_GAMEPAD_MAPPING.brake),
+    acc: normalizeButtonBinding(mapping.acc, DEFAULT_GAMEPAD_MAPPING.acc),
+    lca: normalizeButtonBinding(mapping.lca, DEFAULT_GAMEPAD_MAPPING.lca),
     deadzone: clamp(Number(mapping.deadzone) || DEFAULT_GAMEPAD_MAPPING.deadzone, 0, 0.5),
     steerGain: clamp(Number(mapping.steerGain) || DEFAULT_GAMEPAD_MAPPING.steerGain, 0.1, 1.5)
   };
 }
 
-function clampIndex(value: number): number {
+function normalizeControlBinding(binding: unknown, fallback: GamepadControlBinding): GamepadControlBinding {
+  if (isRecord(binding) && binding.kind === "button") return normalizeButtonBinding(binding, fallback.kind === "button" ? fallback : DEFAULT_GAMEPAD_MAPPING.acc);
+  return normalizeAxisBinding(binding, fallback.kind === "axis" ? fallback : DEFAULT_GAMEPAD_MAPPING.steer);
+}
+
+function normalizeAxisBinding(binding: unknown, fallback: GamepadAxisBinding): GamepadAxisBinding {
+  if (!isRecord(binding)) return { ...fallback };
+  return {
+    kind: "axis",
+    index: clampIndex(binding.index),
+    invert: binding.invert === true
+  };
+}
+
+function normalizeButtonBinding(binding: unknown, fallback: GamepadButtonBinding): GamepadButtonBinding {
+  if (!isRecord(binding)) return { ...fallback };
+  return {
+    kind: "button",
+    index: clampIndex(binding.index)
+  };
+}
+
+function cloneGamepadMapping(mapping: GamepadMapping): GamepadMapping {
+  return {
+    steer: { ...mapping.steer },
+    accelerator: { ...mapping.accelerator },
+    brake: { ...mapping.brake },
+    acc: { ...mapping.acc },
+    lca: { ...mapping.lca },
+    deadzone: mapping.deadzone,
+    steerGain: mapping.steerGain
+  };
+}
+
+function bindingIndex(binding: GamepadControlBinding): number {
+  return binding.index;
+}
+
+function legacyIndex(value: unknown, fallback: number): number {
+  return Number.isFinite(Number(value)) ? Number(value) : fallback;
+}
+
+function numberOr(value: unknown, fallback: number): number {
+  return Number.isFinite(Number(value)) ? Number(value) : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function clampIndex(value: unknown): number {
   return Math.max(0, Math.min(31, Math.round(Number(value) || 0)));
 }

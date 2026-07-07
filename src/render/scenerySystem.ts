@@ -14,14 +14,17 @@ import {
   MeshBasicMaterial,
   MeshLambertMaterial,
   Object3D,
+  PlaneGeometry,
   RepeatWrapping,
   Scene,
   SphereGeometry
 } from "three";
+import { SCENES } from "../game/config";
 import { RoadModel } from "../game/route";
-import type { RenderQuality, SimSnapshot } from "../game/types";
-import { hash01, lerp, TAU } from "../shared/math";
+import type { RenderQuality, SceneKey, SimSnapshot } from "../game/types";
+import { clamp, hash01, lerp, smoothstep, TAU } from "../shared/math";
 import { createClumpyFoliageGeometry } from "./geometry";
+import { roadsideSlotForScene, sceneBoundsFor, worldFromSceneRoad } from "./scenerySlots";
 import { createStreetlightConeMaterial } from "./vehicleLights";
 
 const tmpObject = new Object3D();
@@ -29,6 +32,17 @@ const tmpColor = new Color();
 const CROSSWALK_MAX_STRIPES = 240;
 const CROSSWALK_STRIPE_SEGMENTS = 4;
 const CROSSWALK_VERTS_PER_STRIPE = (CROSSWALK_STRIPE_SEGMENTS + 1) * 2;
+const BILLBOARD_PHRASES = [
+  "KEEP YOUR LANE",
+  "SMOOTH IS FAST",
+  "CHECK MIRRORS",
+  "DRIVE AHEAD",
+  "MIND THE GAP",
+  "CRUISE CLEAN",
+  "LOOK FAR",
+  "SIGNAL EARLY"
+];
+const SPEED_SIGN_LIMITS = [30, 50, 70] as const;
 
 function createBuildingTexture(): CanvasTexture {
   const canvas = document.createElement("canvas");
@@ -64,12 +78,163 @@ function createBuildingTexture(): CanvasTexture {
   return texture;
 }
 
+function createDenseWindowTexture(seed = 0): CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 96;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#d8e3e4";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#6e9298";
+  ctx.fillRect(0, 0, canvas.width, 5);
+  ctx.fillRect(0, canvas.height - 7, canvas.width, 7);
+  const cols = 6;
+  const rows = 24;
+  const colW = canvas.width / cols;
+  const rowH = canvas.height / rows;
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const lit = hash01(seed + row * 19.7 + col * 53.1);
+      ctx.fillStyle = lit > 0.68 ? "#fff0a3" : lit > 0.36 ? "#375867" : "#183241";
+      ctx.fillRect(col * colW + 4, row * rowH + 4, colW - 8, rowH - 6);
+    }
+  }
+  const texture = new CanvasTexture(canvas);
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  return texture;
+}
+
+function createBillboardTexture(text: string, seed: number): CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+  const hue = Math.floor(170 + hash01(seed) * 180);
+  ctx.fillStyle = `hsl(${hue}, 68%, 42%)`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "rgba(255,255,255,0.16)";
+  ctx.fillRect(0, 0, canvas.width, 42);
+  ctx.fillRect(0, canvas.height - 34, canvas.width, 34);
+  ctx.strokeStyle = "#f4fbff";
+  ctx.lineWidth = 14;
+  ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "700 54px system-ui, sans-serif";
+  const words = text.split(" ");
+  if (words.length > 2) {
+    ctx.fillText(words.slice(0, 2).join(" "), canvas.width / 2, 102);
+    ctx.fillText(words.slice(2).join(" "), canvas.width / 2, 162);
+  } else {
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  }
+  ctx.font = "700 20px system-ui, sans-serif";
+  ctx.fillText("SLIMULATOR", canvas.width / 2, canvas.height - 28);
+  return new CanvasTexture(canvas);
+}
+
+function createSpeedLimitTexture(limit: number): CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 192;
+  canvas.height = 240;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#d9e0dc";
+  roundRect(ctx, 18, 14, canvas.width - 36, canvas.height - 28, 14);
+  ctx.fill();
+  ctx.strokeStyle = "#283238";
+  ctx.lineWidth = 8;
+  roundRect(ctx, 18, 14, canvas.width - 36, canvas.height - 28, 14);
+  ctx.stroke();
+  ctx.fillStyle = "#283238";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "800 28px system-ui, sans-serif";
+  ctx.fillText("SPEED", canvas.width / 2, 58);
+  ctx.fillText("LIMIT", canvas.width / 2, 92);
+  ctx.font = "900 86px system-ui, sans-serif";
+  ctx.fillText(String(limit), canvas.width / 2, 162);
+  return new CanvasTexture(canvas);
+}
+
+function createTransitionSignTexture(label: string): CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+  const lines = label.split("\n");
+
+  ctx.fillStyle = "#123f45";
+  roundRect(ctx, 16, 16, canvas.width - 32, canvas.height - 32, 18);
+  ctx.fill();
+  ctx.strokeStyle = "#e9fbf6";
+  ctx.lineWidth = 10;
+  roundRect(ctx, 16, 16, canvas.width - 32, canvas.height - 32, 18);
+  ctx.stroke();
+  ctx.fillStyle = "#e9fbf6";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "900 54px system-ui, sans-serif";
+  ctx.fillText(lines[0] ?? "", canvas.width / 2, 92);
+  ctx.font = "900 72px system-ui, sans-serif";
+  ctx.fillText(lines[1] ?? "", canvas.width / 2, 164);
+  return new CanvasTexture(canvas);
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number): void {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+}
+
 type CrosswalkPaint = {
   mesh: Mesh<BufferGeometry, MeshBasicMaterial>;
   positions: Float32Array;
   uvs: Float32Array;
   maxStripes: number;
 };
+
+type LandmarkCounts = {
+  shop: number;
+  awning: number;
+  bulk: number;
+  lot: number;
+  stripe: number;
+  tower: number;
+  billboardPost: number;
+  billboardFace: number;
+};
+
+type SpeedSignCounts = {
+  post: number;
+  face: number;
+};
+
+type TransitionSignCounts = {
+  post: number;
+  face: number;
+};
+
+function sceneSeedShift(scene: SceneKey): number {
+  if (scene === "l2") return 4099;
+  if (scene === "l3") return 9970;
+  return 0;
+}
+
+function transitionSignLabel(from: SceneKey, to: SceneKey): string {
+  if (to === "unmapped") return "EXITING\nHWY";
+  if (from === "unmapped") return "ENTERING\nHWY";
+  return `ENTERING\n${to.toUpperCase()} HWY`;
+}
 
 export class ScenerySystem {
   private readonly buildingMesh: InstancedMesh;
@@ -95,8 +260,26 @@ export class ScenerySystem {
   private readonly urbanBlocks: InstancedMesh;
   private readonly urbanRoofCaps: InstancedMesh;
   private readonly buildingWings: InstancedMesh;
+  private readonly shopBuildings: InstancedMesh;
+  private readonly shopAwnings: InstancedMesh;
+  private readonly bulkStores: InstancedMesh;
+  private readonly parkingLots: InstancedMesh;
+  private readonly parkingStripes: InstancedMesh;
+  private readonly skyscrapers: InstancedMesh;
+  private readonly billboardPosts: InstancedMesh;
+  private readonly speedSignPosts: InstancedMesh;
+  private readonly transitionSignPosts: InstancedMesh;
+  private readonly billboardFaces: Array<Mesh<PlaneGeometry, MeshBasicMaterial>> = [];
+  private readonly billboardMaterials: MeshBasicMaterial[];
+  private readonly speedSignFaces: Array<Mesh<PlaneGeometry, MeshBasicMaterial>> = [];
+  private readonly speedSignMaterials: Map<number, MeshBasicMaterial>;
+  private readonly transitionSignFaces: Array<Mesh<PlaneGeometry, MeshBasicMaterial>> = [];
+  private readonly transitionSignMaterials = new Map<string, MeshBasicMaterial>();
   private qualityMode: RenderQuality = "high";
   private lastUpdateKey = "";
+  private speedSignScene: SceneKey | null = null;
+  private speedSignSessionStartedAt = "";
+  private speedSignAnchor = 0;
 
   constructor(private readonly scene: Scene, private readonly road: RoadModel) {
     const buildingTex = createBuildingTexture();
@@ -126,6 +309,29 @@ export class ScenerySystem {
     this.buildingWings = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ map: buildingTex, color: 0xffffff }), 180, true);
     this.urbanBlocks = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ map: buildingTex, color: 0xffffff }), 180, true);
     this.urbanRoofCaps = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x93b4bb }), 180, true);
+    this.shopBuildings = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xcbd7d2 }), 56, true);
+    this.shopAwnings = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x4ea6b1 }), 56, true);
+    this.bulkStores = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xb7c6c9 }), 42, true);
+    this.parkingLots = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x263034 }), 86, false);
+    this.parkingStripes = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshBasicMaterial({ color: 0xd9e2df }), 220, false);
+    this.skyscrapers = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ map: createDenseWindowTexture(this.road.seed), color: 0xffffff }), 54, true);
+    this.billboardPosts = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x223238 }), 120, true);
+    this.speedSignPosts = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xcbd5d2 }), 56, true);
+    this.transitionSignPosts = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x6f8b88 }), 8, true);
+    this.billboardMaterials = BILLBOARD_PHRASES.map((phrase, index) => new MeshBasicMaterial({
+      map: createBillboardTexture(phrase, this.road.seed + index * 127.3),
+      side: DoubleSide,
+      fog: false
+    }));
+    this.speedSignMaterials = new Map(SPEED_SIGN_LIMITS.map((limit) => [limit, new MeshBasicMaterial({
+      map: createSpeedLimitTexture(limit),
+      color: 0xb8c2bd,
+      side: DoubleSide,
+      fog: true
+    })]));
+    this.createPlanePool(this.billboardFaces, 38, this.billboardMaterials[0], true);
+    this.createPlanePool(this.speedSignFaces, 24, this.speedSignMaterials.get(30)!, true);
+    this.createPlanePool(this.transitionSignFaces, 4, this.transitionSignMaterial("ENTERING\nHWY"), true);
   }
 
   setQualityMode(mode: RenderQuality): void {
@@ -139,30 +345,14 @@ export class ScenerySystem {
       ? { backDistance: 50, forwardDistance: 420, timeHz: 8, density: 1 }
       : { backDistance: 36, forwardDistance: 260, timeHz: 4, density: 0.54 };
     const transition = snapshot.road.transition;
-    const transitionBucket = transition ? Math.floor(transition.progress * 16) : 0;
+    const transitionKey = transition ? `${transition.from}:${transition.to}:${Math.floor(transition.progress * 1000)}` : "";
     const startAnchor = Math.floor((snapshot.vehicle.roadPositionM - settings.backDistance) / 18);
     const endAnchor = Math.ceil((snapshot.vehicle.roadPositionM + settings.forwardDistance) / 18);
     const timeBucket = Math.floor(nowSeconds * settings.timeHz);
-    const updateKey = `${this.qualityMode}:${startAnchor}:${endAnchor}:${timeBucket}:${snapshot.road.scene}:${transition?.from ?? ""}:${transition?.to ?? ""}:${transitionBucket}`;
+    const updateKey = `${this.qualityMode}:${startAnchor}:${endAnchor}:${timeBucket}:${snapshot.road.scene}:${transitionKey}`;
     if (updateKey === this.lastUpdateKey) return;
     this.lastUpdateKey = updateKey;
 
-    const city = this.road.sceneValue("city");
-    let buildingDensity = this.road.sceneValue("buildings");
-    let treeDensity = this.road.sceneValue("trees");
-    const forest = this.road.sceneValue("forest");
-    const crosswalkPresence = this.road.sceneValue("crosswalks");
-    const trafficLightPresence = this.road.sceneValue("trafficLights");
-    const buildingScale = this.road.sceneValue("buildingScale");
-    const safetyMargin = this.road.sceneValue("buildingSetback");
-    const skylineDensity = this.road.sceneValue("skylineDensity");
-    buildingDensity *= settings.density;
-    treeDensity *= this.qualityMode === "high" ? 1 : 0.48;
-
-    const activeBuildingScale = buildingScale;
-    const activeUrbanScale = skylineDensity * 1.45;
-    const activeUrban = skylineDensity > 0.01;
-    const seedOffset = this.road.seed % 10000;
     const baseS = snapshot.vehicle.roadPositionM;
     let building = 0;
     let cap = 0;
@@ -189,6 +379,21 @@ export class ScenerySystem {
     let wing = 0;
     for (let anchor = startAnchor; anchor <= endAnchor; anchor++) {
       const s = anchor * 18;
+      const sceneryScene = this.road.scenerySceneAt(s);
+      const sceneConfig = SCENES[sceneryScene];
+      const city = sceneConfig.city;
+      const forest = sceneConfig.forest;
+      const crosswalkPresence = sceneConfig.crosswalks;
+      const trafficLightPresence = sceneConfig.trafficLights;
+      const buildingScale = sceneConfig.buildingScale;
+      const safetyMargin = sceneConfig.buildingSetback;
+      const skylineDensity = sceneConfig.skylineDensity;
+      const buildingDensity = sceneConfig.buildings * settings.density;
+      const treeDensity = sceneConfig.trees * (this.qualityMode === "high" ? 1 : 0.48);
+      const activeBuildingScale = buildingScale;
+      const activeUrbanScale = skylineDensity * 1.45;
+      const activeUrban = skylineDensity > 0.01;
+      const seedOffset = (this.road.seed + sceneSeedShift(sceneryScene)) % 10000;
       const bounds = this.road.boundsAt(s);
       const frame = this.road.frameAt(s);
       const rot = Math.PI + frame.heading;
@@ -286,6 +491,7 @@ export class ScenerySystem {
       if (activeUrban && anchor % (activeUrbanScale > 1.1 ? 2 : 3) === 0) {
         for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
           if (urbanBlock >= this.capacity(this.urbanBlocks) || urbanCap >= this.capacity(this.urbanRoofCaps)) break;
+          if (this.reservesBillboardSlot(anchor, sideIndex)) continue;
           const side = sideIndex ? 1 : -1;
           const blockSeed = anchor * 23.9 + sideIndex * 71.1 + seedOffset;
           const lateralBase = (side < 0 ? bounds.leftWall : bounds.rightWall) + side * (safetyMargin + lerp(12, 36, hash01(blockSeed)));
@@ -331,6 +537,7 @@ export class ScenerySystem {
       }
 
       for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
+        if (this.reservesBillboardSlot(anchor, sideIndex)) continue;
         const side = sideIndex ? 1 : -1;
         const h = hash01(anchor * 11.17 + sideIndex * 43 + seedOffset);
         const objectS = s + (hash01(anchor * 5.13 + sideIndex) - 0.5) * 12;
@@ -344,13 +551,15 @@ export class ScenerySystem {
         const frame = this.road.frameAt(objectS);
         const rot = Math.PI + frame.heading;
 
-        if (activeBuildingScale > 0 && (h < buildingDensity || forcedUrbanBuilding)) {
+        const buildingVisibility = forcedUrbanBuilding ? 1 : smoothstep(clamp((buildingDensity - h + 0.16) / 0.34, 0, 1));
+        if (activeBuildingScale > 0 && buildingVisibility > 0.04) {
           if (building >= this.capacity(this.buildingMesh) || cap >= this.capacity(this.buildingCaps)) continue;
           const shapeSeed = anchor * 12.31 + sideIndex * 91.7 + seedOffset;
+          const growthScale = forcedUrbanBuilding ? 1 : lerp(0.38, 1, buildingVisibility);
           const baseHeight = forcedUrbanBuilding ? lerp(18, activeBuildingScale > 1.1 ? 66 : 38, hash01(shapeSeed + 5)) : lerp(10, activeBuildingScale > 1.1 ? 58 : 44, Math.pow(hash01(shapeSeed), 0.75));
-          const height = baseHeight * activeBuildingScale;
-          const width = lerp(6.5, activeBuildingScale > 1.1 ? 26 : 20, hash01(shapeSeed + 3));
-          const depth = lerp(7, activeBuildingScale > 1.1 ? 30 : 22, hash01(shapeSeed + 7));
+          const height = baseHeight * activeBuildingScale * growthScale;
+          const width = lerp(6.5, activeBuildingScale > 1.1 ? 26 : 20, hash01(shapeSeed + 3)) * lerp(0.72, 1, growthScale);
+          const depth = lerp(7, activeBuildingScale > 1.1 ? 30 : 22, hash01(shapeSeed + 7)) * lerp(0.72, 1, growthScale);
 
           // Calculate safety margin and setback based on the diagonal radius
           const diagonalRadius = Math.sqrt(width * width + depth * depth) / 2;
@@ -404,13 +613,20 @@ export class ScenerySystem {
       }
     }
 
-    if (activeUrban) {
-      const urbanSpacing = activeUrbanScale > 1.1 ? 42 : 56;
+    for (const urbanSpacing of [42, 56]) {
       const startUrbanAnchor = Math.floor((baseS - settings.backDistance) / urbanSpacing);
       const endUrbanAnchor = Math.ceil((baseS + settings.forwardDistance) / urbanSpacing);
 
       for (let anchor = startUrbanAnchor; anchor <= endUrbanAnchor; anchor++) {
         const s = anchor * urbanSpacing;
+        const sceneryScene = this.road.scenerySceneAt(s);
+        const sceneConfig = SCENES[sceneryScene];
+        const skylineDensity = sceneConfig.skylineDensity;
+        if (skylineDensity <= 0.01) continue;
+        const activeUrbanScale = skylineDensity * 1.45;
+        if ((activeUrbanScale > 1.1 && urbanSpacing !== 42) || (activeUrbanScale <= 1.1 && urbanSpacing !== 56)) continue;
+        const safetyMargin = sceneConfig.buildingSetback;
+        const seedOffset = (this.road.seed + sceneSeedShift(sceneryScene)) % 10000;
         const bounds = this.road.boundsAt(s);
         const frame = this.road.frameAt(s);
         const rot = Math.PI + frame.heading;
@@ -438,6 +654,9 @@ export class ScenerySystem {
       }
     }
 
+    const landmarkCounts = this.writeLandmarks(startAnchor, endAnchor);
+    const speedSignCounts = this.writeSpeedSigns(snapshot, startAnchor, endAnchor);
+    const transitionSignCounts = this.writeTransitionSign(snapshot, startAnchor, endAnchor);
     this.applyCrosswalkCount(cross);
     this.applyCounts([
       [this.buildingMesh, building],
@@ -461,8 +680,223 @@ export class ScenerySystem {
       [this.pedestrianArms, pedArm],
       [this.pedestrianLegs, pedLeg],
       [this.urbanBlocks, urbanBlock],
-      [this.urbanRoofCaps, urbanCap]
+      [this.urbanRoofCaps, urbanCap],
+      [this.shopBuildings, landmarkCounts.shop],
+      [this.shopAwnings, landmarkCounts.awning],
+      [this.bulkStores, landmarkCounts.bulk],
+      [this.parkingLots, landmarkCounts.lot],
+      [this.parkingStripes, landmarkCounts.stripe],
+      [this.skyscrapers, landmarkCounts.tower],
+      [this.billboardPosts, landmarkCounts.billboardPost],
+      [this.speedSignPosts, speedSignCounts.post],
+      [this.transitionSignPosts, transitionSignCounts.post]
     ]);
+    this.hidePlanePool(this.billboardFaces, landmarkCounts.billboardFace);
+    this.hidePlanePool(this.speedSignFaces, speedSignCounts.face);
+    this.hidePlanePool(this.transitionSignFaces, transitionSignCounts.face);
+  }
+
+  private writeLandmarks(startAnchor: number, endAnchor: number): LandmarkCounts {
+    const counts: LandmarkCounts = { shop: 0, awning: 0, bulk: 0, lot: 0, stripe: 0, tower: 0, billboardPost: 0, billboardFace: 0 };
+    const spacing = this.qualityMode === "high" ? 4 : 6;
+
+    for (let anchor = startAnchor; anchor <= endAnchor; anchor++) {
+      const scene = this.road.scenerySceneAt(anchor * 18);
+      const seedShift = sceneSeedShift(scene);
+      const layerSeed = this.road.seed + seedShift;
+      const baseScale = 1;
+      if (positiveModulo(anchor + Math.floor(seedShift / 997), spacing) !== 0) continue;
+      for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
+        const preview = roadsideSlotForScene(scene, anchor, sideIndex, layerSeed, 8);
+          if (preview.variant === "standard") continue;
+          if (this.qualityMode === "perf" && hash01(layerSeed + anchor * 13.1 + sideIndex * 71.7) > 0.66) continue;
+
+          const radius = preview.variant === "bulk" ? 20 : preview.variant === "skyscraper" ? 14 : preview.variant === "billboard" ? 11 : 8;
+          const slot = roadsideSlotForScene(scene, anchor, sideIndex, layerSeed, radius);
+          const s = anchor * 18 + slot.sOffset;
+          const point = worldFromSceneRoad(scene, s, slot.lateral, 0, this.road.seed);
+          const rot = Math.PI + point.heading + slot.rotationJitter;
+          const faceRot = point.heading + slot.rotationJitter * 0.3;
+          const shapeSeed = layerSeed + anchor * 29.7 + sideIndex * 97.3;
+          const scale = clamp(baseScale * lerp(0.88, 1.08, hash01(shapeSeed + 1)), 0, 1);
+          if (scale < 0.035) continue;
+
+          if (slot.variant === "shop") {
+            if (counts.shop >= this.capacity(this.shopBuildings) || counts.awning >= this.capacity(this.shopAwnings)) continue;
+            const width = lerp(7.8, 11.8, hash01(shapeSeed + 3)) * lerp(0.72, 1, scale);
+            const height = lerp(3.3, 5.0, hash01(shapeSeed + 5)) * scale;
+            const depth = lerp(6.4, 9.0, hash01(shapeSeed + 7)) * lerp(0.78, 1, scale);
+            const p = worldFromSceneRoad(scene, s, slot.lateral, height * 0.5, this.road.seed);
+            setInstance(this.shopBuildings, counts.shop, p.x, p.y, p.z, width, height, depth, rot);
+            this.shopBuildings.setColorAt(counts.shop, tmpColor.setHSL(0.48 + hash01(shapeSeed + 13) * 0.12, 0.22, 0.62 + hash01(shapeSeed + 17) * 0.13));
+            counts.shop++;
+
+            const awningPoint = worldFromSceneRoad(scene, s - slot.side * 0.2, slot.lateral - slot.side * width * 0.18, Math.max(1.1, height * 0.66), this.road.seed);
+            setInstance(this.shopAwnings, counts.awning, awningPoint.x, awningPoint.y, awningPoint.z, width * 0.82, 0.34 * scale, 1.1 * scale, rot);
+            this.shopAwnings.setColorAt(counts.awning, tmpColor.setHSL(0.02 + hash01(shapeSeed + 19) * 0.56, 0.54, 0.48));
+            counts.awning++;
+            this.writeParkingLot(counts, scene, s, slot.side, slot.clearance, rot, 11.5, 14.5, scale, shapeSeed);
+            continue;
+          }
+
+          if (slot.variant === "bulk") {
+            if (counts.bulk >= this.capacity(this.bulkStores)) continue;
+            const width = lerp(24, 36, hash01(shapeSeed + 23)) * lerp(0.72, 1, scale);
+            const height = lerp(5.5, 8.5, hash01(shapeSeed + 29)) * scale;
+            const depth = lerp(14, 22, hash01(shapeSeed + 31)) * lerp(0.78, 1, scale);
+            const p = worldFromSceneRoad(scene, s, slot.lateral, height * 0.5, this.road.seed);
+            setInstance(this.bulkStores, counts.bulk, p.x, p.y, p.z, width, height, depth, rot);
+            this.bulkStores.setColorAt(counts.bulk, tmpColor.setHSL(0.52 + hash01(shapeSeed + 37) * 0.08, 0.16, 0.56 + hash01(shapeSeed + 41) * 0.12));
+            counts.bulk++;
+            this.writeParkingLot(counts, scene, s, slot.side, slot.clearance, rot, 24, 32, scale, shapeSeed + 47);
+            continue;
+          }
+
+          if (slot.variant === "skyscraper") {
+            if (counts.tower >= this.capacity(this.skyscrapers)) continue;
+            const width = lerp(10, 18, hash01(shapeSeed + 43)) * lerp(0.72, 1, scale);
+            const height = lerp(48, 112, hash01(shapeSeed + 47)) * scale;
+            const depth = lerp(10, 22, hash01(shapeSeed + 53)) * lerp(0.72, 1, scale);
+            const p = worldFromSceneRoad(scene, s, slot.lateral, height * 0.5, this.road.seed);
+            setInstance(this.skyscrapers, counts.tower, p.x, p.y, p.z, width, height, depth, rot + (hash01(shapeSeed + 59) - 0.5) * 0.12);
+            this.skyscrapers.setColorAt(counts.tower, tmpColor.setHSL(0.54 + hash01(shapeSeed + 61) * 0.08, 0.22, 0.5 + hash01(shapeSeed + 67) * 0.14));
+            counts.tower++;
+            continue;
+          }
+
+          if (slot.variant === "billboard") {
+            if (
+              counts.billboardPost + 1 >= this.capacity(this.billboardPosts) ||
+              counts.billboardFace >= this.planeCapacity(this.billboardFaces)
+            ) {
+              continue;
+            }
+            const signWidth = lerp(13, 18, hash01(shapeSeed + 71)) * lerp(0.72, 1, scale);
+            const signHeight = lerp(5.8, 8.5, hash01(shapeSeed + 73)) * scale;
+            const postHeight = 4.6 + signHeight * 0.54;
+            for (const lateralOffset of [-signWidth * 0.42, signWidth * 0.42]) {
+              const post = worldFromSceneRoad(scene, s, slot.lateral + lateralOffset, postHeight * 0.5, this.road.seed);
+              setInstance(this.billboardPosts, counts.billboardPost++, post.x, post.y, post.z, 0.26, postHeight, 0.26, rot);
+            }
+            const facePoint = worldFromSceneRoad(scene, s, slot.lateral, postHeight + signHeight * 0.12, this.road.seed);
+            const materialIndex = Math.floor(hash01(shapeSeed + 79) * this.billboardMaterials.length) % this.billboardMaterials.length;
+            this.setPlane(this.billboardFaces, counts.billboardFace++, facePoint.x, facePoint.y, facePoint.z, signWidth, signHeight, faceRot, this.billboardMaterials[materialIndex]);
+          }
+        }
+      }
+    return counts;
+  }
+
+  private reservesBillboardSlot(anchor: number, sideIndex: number): boolean {
+    const spacing = this.qualityMode === "high" ? 4 : 6;
+    const scene = this.road.scenerySceneAt(anchor * 18);
+    const seedShift = sceneSeedShift(scene);
+    if (positiveModulo(anchor + Math.floor(seedShift / 997), spacing) !== 0) return false;
+    const layerSeed = this.road.seed + seedShift;
+    return roadsideSlotForScene(scene, anchor, sideIndex, layerSeed, 11).variant === "billboard";
+  }
+
+  private writeParkingLot(
+    counts: LandmarkCounts,
+    scene: SceneKey,
+    s: number,
+    side: -1 | 1,
+    clearance: number,
+    rot: number,
+    lateralDepth: number,
+    roadLength: number,
+    scale: number,
+    seed: number
+  ): void {
+    if (counts.lot >= this.capacity(this.parkingLots)) return;
+    const lotLateral = clearance + side * (2.8 + lateralDepth * 0.5);
+    const lotS = s + (hash01(seed + 3) - 0.5) * 2.5;
+    const p = worldFromSceneRoad(scene, lotS, lotLateral, 0.055, this.road.seed);
+    setInstance(this.parkingLots, counts.lot++, p.x, p.y, p.z, lateralDepth * lerp(0.7, 1, scale), 0.08, roadLength * lerp(0.72, 1, scale), rot);
+    if (scale < 0.34) return;
+    const stripeCount = this.qualityMode === "high" ? 5 : 3;
+    for (let i = 0; i < stripeCount && counts.stripe < this.capacity(this.parkingStripes); i++) {
+      const t = i / (stripeCount - 1);
+      const stripeS = lotS + lerp(-roadLength * 0.34, roadLength * 0.34, t);
+      const stripe = worldFromSceneRoad(scene, stripeS, lotLateral, 0.12, this.road.seed);
+      setInstance(this.parkingStripes, counts.stripe++, stripe.x, stripe.y, stripe.z, lateralDepth * 0.58, 0.035, 0.11, rot);
+    }
+  }
+
+  private writeSpeedSigns(snapshot: SimSnapshot, startAnchor: number, endAnchor: number): SpeedSignCounts {
+    const counts: SpeedSignCounts = { post: 0, face: 0 };
+    if (snapshot.road.transition) return counts;
+    const scene = snapshot.road.scene;
+    const sessionStartedAt = snapshot.session.startedAt ?? "";
+    if (this.speedSignScene !== scene || this.speedSignSessionStartedAt !== sessionStartedAt) {
+      this.speedSignScene = scene;
+      this.speedSignSessionStartedAt = sessionStartedAt;
+      this.speedSignAnchor = Math.ceil((snapshot.vehicle.roadPositionM + 76) / 18);
+    }
+    const limit = SCENES[scene].speedLimitMph;
+    const material = this.speedSignMaterials.get(limit);
+    if (!material) return counts;
+    if (this.speedSignAnchor < startAnchor || this.speedSignAnchor > endAnchor) return counts;
+    const bounds = sceneBoundsFor(scene);
+    if (
+      counts.post >= this.capacity(this.speedSignPosts) ||
+      counts.face >= this.planeCapacity(this.speedSignFaces)
+    ) {
+      return counts;
+    }
+    const s = this.speedSignAnchor * 18 + 7;
+    const lateral = bounds.rightWall + 3.0;
+    const postHeight = 2.27;
+    const signHeight = 2.12;
+    const signWidth = 1.7;
+    const base = worldFromSceneRoad(scene, s, lateral, postHeight * 0.5, this.road.seed);
+    setInstance(this.speedSignPosts, counts.post++, base.x, base.y, base.z, 0.12, postHeight, 0.12, base.heading);
+    const faceY = postHeight + 0.16 + signHeight * 0.5;
+    const face = worldFromSceneRoad(scene, s, lateral, faceY, this.road.seed);
+    this.setPlane(this.speedSignFaces, counts.face++, face.x, face.y, face.z, signWidth, signHeight, face.heading, material);
+    return counts;
+  }
+
+  private writeTransitionSign(snapshot: SimSnapshot, startAnchor: number, endAnchor: number): TransitionSignCounts {
+    const counts: TransitionSignCounts = { post: 0, face: 0 };
+    const transition = snapshot.road.transition;
+    if (!transition) return counts;
+
+    const markerS = transition.originS + Math.min(82, Math.max(58, (transition.taperStartS - transition.originS) * 0.28));
+    const markerAnchor = Math.floor(markerS / 18);
+    if (markerAnchor < startAnchor || markerAnchor > endAnchor) return counts;
+    if (counts.face >= this.planeCapacity(this.transitionSignFaces) || counts.post + 2 > this.capacity(this.transitionSignPosts)) return counts;
+
+    const label = transitionSignLabel(transition.from, transition.to);
+    const material = this.transitionSignMaterial(label);
+    const bounds = this.road.boundsAt(markerS);
+    const lateral = bounds.rightEdge + 4.2;
+    const postHeight = 3.55;
+    const signWidth = 6.9;
+    const signHeight = 2.75;
+    const framePoint = this.road.worldFromRoad(markerS, lateral, 0);
+    const rot = framePoint.heading;
+
+    for (const lateralOffset of [-signWidth * 0.34, signWidth * 0.34]) {
+      const post = this.road.worldFromRoad(markerS, lateral + lateralOffset, postHeight * 0.5);
+      setInstance(this.transitionSignPosts, counts.post++, post.x, post.y, post.z, 0.16, postHeight, 0.16, rot);
+    }
+    const faceY = postHeight + 0.22 + signHeight * 0.5;
+    const face = this.road.worldFromRoad(markerS, lateral, faceY);
+    this.setPlane(this.transitionSignFaces, counts.face++, face.x, face.y, face.z, signWidth, signHeight, rot, material);
+    return counts;
+  }
+
+  private transitionSignMaterial(label: string): MeshBasicMaterial {
+    const existing = this.transitionSignMaterials.get(label);
+    if (existing) return existing;
+    const material = new MeshBasicMaterial({
+      map: createTransitionSignTexture(label),
+      side: DoubleSide,
+      fog: true
+    });
+    this.transitionSignMaterials.set(label, material);
+    return material;
   }
 
   private createInstanced(geometry: BufferGeometry, material: Material, count: number, shadows: boolean): InstancedMesh {
@@ -473,6 +907,44 @@ export class ScenerySystem {
     mesh.frustumCulled = false;
     this.scene.add(mesh);
     return mesh;
+  }
+
+  private createPlanePool(pool: Array<Mesh<PlaneGeometry, MeshBasicMaterial>>, count: number, material: MeshBasicMaterial, shadows: boolean): void {
+    for (let i = 0; i < count; i++) {
+      const mesh = new Mesh(new PlaneGeometry(1, 1), material);
+      mesh.visible = false;
+      mesh.castShadow = shadows;
+      mesh.receiveShadow = false;
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+      pool.push(mesh);
+    }
+  }
+
+  private setPlane(
+    pool: Array<Mesh<PlaneGeometry, MeshBasicMaterial>>,
+    index: number,
+    x: number,
+    y: number,
+    z: number,
+    width: number,
+    height: number,
+    rotY: number,
+    material: MeshBasicMaterial
+  ): void {
+    const mesh = pool[index];
+    if (!mesh) return;
+    mesh.material = material;
+    mesh.visible = true;
+    mesh.position.set(x, y, z);
+    mesh.rotation.set(0, rotY, 0);
+    mesh.scale.set(width, height, 1);
+  }
+
+  private hidePlanePool(pool: Array<Mesh<PlaneGeometry, MeshBasicMaterial>>, visibleCount: number): void {
+    for (let i = 0; i < pool.length; i++) {
+      pool[i].visible = i < visibleCount;
+    }
   }
 
   private createCrosswalkPaint(): CrosswalkPaint {
@@ -560,6 +1032,11 @@ export class ScenerySystem {
     if (mesh === this.pedestrianBodies || mesh === this.pedestrianHeads || mesh === this.pedestrianArms || mesh === this.pedestrianLegs) return max;
     return Math.floor(max * 0.52);
   }
+
+  private planeCapacity(pool: Array<Mesh<PlaneGeometry, MeshBasicMaterial>>): number {
+    if (this.qualityMode === "high") return pool.length;
+    return Math.floor(pool.length * 0.55);
+  }
 }
 
 function setInstance(mesh: InstancedMesh, index: number, x: number, y: number, z: number, sx: number, sy: number, sz: number, rotY = 0): void {
@@ -568,4 +1045,8 @@ function setInstance(mesh: InstancedMesh, index: number, x: number, y: number, z
   tmpObject.scale.set(sx, sy, sz);
   tmpObject.updateMatrix();
   mesh.setMatrixAt(index, tmpObject.matrix);
+}
+
+function positiveModulo(value: number, divisor: number): number {
+  return ((value % divisor) + divisor) % divisor;
 }

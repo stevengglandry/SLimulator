@@ -19,7 +19,8 @@ export const SCENES: Record<SceneKey, SceneConfig> = {
     trafficLights: 0,
     buildingScale: 0,
     buildingSetback: 16.0,
-    skylineDensity: 0
+    skylineDensity: 0,
+    speedLimitMph: 30
   },
   l2: {
     label: "L2 HIGHWAY",
@@ -35,7 +36,8 @@ export const SCENES: Record<SceneKey, SceneConfig> = {
     trafficLights: 0.12,
     buildingScale: 0.45,
     buildingSetback: 8.0,
-    skylineDensity: 0
+    skylineDensity: 0,
+    speedLimitMph: 50
   },
   l3: {
     label: "L3 HIGHWAY",
@@ -51,7 +53,8 @@ export const SCENES: Record<SceneKey, SceneConfig> = {
     trafficLights: 0,
     buildingScale: 2.9,
     buildingSetback: 80.0,
-    skylineDensity: 1.0
+    skylineDensity: 1.0,
+    speedLimitMph: 70
   }
 };
 
@@ -74,7 +77,8 @@ export const config = {
   steeringPointsPerSecond: 10,
   offRoadPenaltyPerSecond: 10,
   crashPenalty: 200,
-  transitionMs: 10000,
+  sceneTransitionLeadM: 255,
+  sceneTransitionTaperM: 115,
   fixedHz: 60,
   stateBroadcastHz: 10,
   sampleHz: 10

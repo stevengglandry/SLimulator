@@ -21,12 +21,21 @@ type BloomControl = {
   strength: number;
 };
 
+type CloudBase = {
+  x: number;
+  y: number;
+  z: number;
+  speed: number;
+  phase: number;
+};
+
 export class AtmosphereSystem {
   private readonly sky = new Mesh(new PlaneGeometry(4000, 1600), new MeshBasicMaterial({ color: 0x8fb9c7, depthWrite: false }));
   private readonly mountainFar: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly mountainNear: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly lowFogBand: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private readonly cloudGroup = new Group();
+  private readonly cloudBases: CloudBase[] = [];
   private qualityMode: RenderQuality = "high";
 
   constructor(
@@ -115,11 +124,15 @@ export class AtmosphereSystem {
         lerp(0.72, 1.38, hash01(i * 61))
       );
       cloud.rotation.y = (hash01(i * 67) - 0.5) * 0.35;
-      cloud.position.set(
-        -430 + hash01(i * 31) * 860,
-        82 + hash01(i * 37) * 122,
-        -150 - hash01(i * 41) * 640
-      );
+      const base: CloudBase = {
+        x: -430 + hash01(i * 31) * 860,
+        y: 82 + hash01(i * 37) * 122,
+        z: -150 - hash01(i * 41) * 640,
+        speed: 2.4 + hash01(i * 43) * 5.8,
+        phase: hash01(i * 89) * Math.PI * 2
+      };
+      cloud.position.set(base.x, base.y, base.z);
+      this.cloudBases.push(base);
       this.cloudGroup.add(cloud);
     }
     this.scene.add(this.cloudGroup);
@@ -127,13 +140,17 @@ export class AtmosphereSystem {
 
   setQualityMode(mode: RenderQuality): void {
     this.qualityMode = mode;
-    this.cloudGroup.visible = mode === "high";
+    this.cloudGroup.visible = true;
+    this.cloudGroup.children.forEach((child, index) => {
+      child.visible = mode === "high" || index % 3 === 0;
+    });
   }
 
-  update(snapshot: SimSnapshot): void {
+  update(snapshot: SimSnapshot, nowSeconds = 0): void {
     const highQuality = this.qualityMode === "high";
-    const forest = this.road.sceneValue("forest");
-    const buildings = this.road.sceneValue("buildingScale");
+    const pose = snapshot.vehicle.pose;
+    const forest = this.road.roadValueAt("forest", pose.s);
+    const buildings = this.road.roadValueAt("buildingScale", pose.s);
     const urban = Math.min(1, buildings);
     const fogColor = new Color(0x438a91)
       .lerp(new Color(0x316f7a), forest * 0.34)
@@ -155,10 +172,18 @@ export class AtmosphereSystem {
     this.renderer.toneMappingExposure = lerp(1.2, 1.06, forest) + urban * 0.05;
     this.bloom.strength = highQuality ? lerp(0.06, 0.11, urban) : 0;
 
-    const pose = snapshot.vehicle.pose;
     // Update sky and cloud position to move with the camera
     this.sky.position.set(pose.x, 420, pose.z - 900);
-    if (highQuality) this.cloudGroup.position.set(pose.x, 0, pose.z);
+    this.cloudGroup.position.set(pose.x, 0, pose.z);
+    this.cloudGroup.children.forEach((child, index) => {
+      const base = this.cloudBases[index];
+      if (!base) return;
+      child.visible = highQuality || index % 3 === 0;
+      const travel = pose.s * 0.08 + nowSeconds * base.speed;
+      const z = wrapRange(base.z + travel, -820, 180);
+      const x = base.x + Math.sin(nowSeconds * 0.015 + base.phase) * 18;
+      child.position.set(x, base.y, z);
+    });
 
     const far = this.road.worldFromRoad(pose.s + 720, 0, 0);
     const near = this.road.worldFromRoad(pose.s + 430, 0, 0);
@@ -203,4 +228,9 @@ export class AtmosphereSystem {
     this.scene.add(mesh);
     return mesh;
   }
+}
+
+function wrapRange(value: number, min: number, max: number): number {
+  const span = max - min;
+  return min + ((((value - min) % span) + span) % span);
 }

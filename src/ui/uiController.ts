@@ -1,7 +1,7 @@
 import { config, SCENES } from "../game/config";
 import { createLogText } from "../game/logging";
 import type { CameraMode, DriverInputSource, SceneKey, SimSnapshot } from "../game/types";
-import type { GamepadMapping } from "../input/inputManager";
+import type { GamepadAxisBinding, GamepadButtonBinding, GamepadControlBinding, GamepadMapping } from "../input/inputManager";
 import { fixed, formatTime } from "../shared/math";
 
 export interface UiActions {
@@ -68,12 +68,13 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
           </div>
           <div id="gamepadConfig" class="gamepad-config" hidden>
             <pre id="gamepadLive" class="gamepad-live label">No gamepad</pre>
-            <div class="compact-fields">
-              <label class="field"><span class="label">Steering Axis</span><select id="gamepadSteerAxis"></select></label>
-              <label class="field"><span class="label">Accel Axis</span><select id="gamepadAccelAxis"></select></label>
-              <label class="field"><span class="label">Brake Axis</span><select id="gamepadBrakeAxis"></select></label>
-              <label class="field"><span class="label">ACC Button</span><select id="gamepadAccButton"></select></label>
-              <label class="field"><span class="label">LCA Button</span><select id="gamepadLcaButton"></select></label>
+            <div id="gamepadAssignStatus" class="gamepad-assign-status label">Ready</div>
+            <div class="gamepad-map-list">
+              <div class="gamepad-map-row"><span class="label">Steering</span><strong id="gamepadSteerBinding">Axis 0</strong><button class="btn micro" data-gamepad-assign="steer" type="button">Assign</button></div>
+              <div class="gamepad-map-row"><span class="label">Accelerator</span><strong id="gamepadAccelBinding">Axis 5</strong><button class="btn micro" data-gamepad-assign="accelerator" type="button">Assign</button></div>
+              <div class="gamepad-map-row"><span class="label">Brake</span><strong id="gamepadBrakeBinding">Axis 2</strong><button class="btn micro" data-gamepad-assign="brake" type="button">Assign</button></div>
+              <div class="gamepad-map-row"><span class="label">ACC</span><strong id="gamepadAccBinding">Button 0</strong><button class="btn micro" data-gamepad-assign="acc" type="button">Assign</button></div>
+              <div class="gamepad-map-row"><span class="label">LCA</span><strong id="gamepadLcaBinding">Button 1</strong><button class="btn micro" data-gamepad-assign="lca" type="button">Assign</button></div>
             </div>
             <button id="gamepadReset" class="btn micro" type="button">Reset Mapping</button>
           </div>
@@ -425,38 +426,131 @@ function setIndicatorState(element: HTMLElement, state: "off" | "armed" | "ready
 }
 
 function setupGamepadMappingControls(actions: UiActions): void {
-  const axisControls: Array<[keyof GamepadMapping, string]> = [
-    ["steerAxis", "gamepadSteerAxis"],
-    ["acceleratorAxis", "gamepadAccelAxis"],
-    ["brakeAxis", "gamepadBrakeAxis"]
-  ];
-  const buttonControls: Array<[keyof GamepadMapping, string]> = [
-    ["accButton", "gamepadAccButton"],
-    ["lcaButton", "gamepadLcaButton"]
-  ];
-
-  axisControls.forEach(([, id]) => populateSelect(must<HTMLSelectElement>(id), "Axis", 8));
-  buttonControls.forEach(([, id]) => populateSelect(must<HTMLSelectElement>(id), "Button", 16));
+  type AssignControl = "steer" | "accelerator" | "brake" | "acc" | "lca";
+  type PadSnapshot = { axes: number[]; buttons: number[] };
+  const bindingLabels: Record<AssignControl, string> = {
+    steer: "gamepadSteerBinding",
+    accelerator: "gamepadAccelBinding",
+    brake: "gamepadBrakeBinding",
+    acc: "gamepadAccBinding",
+    lca: "gamepadLcaBinding"
+  };
+  const status = must<HTMLElement>("gamepadAssignStatus");
+  let captureInterval: number | null = null;
+  let captureTimeout: number | null = null;
+  let activeControl: AssignControl | null = null;
 
   const writeMappingToUi = (mapping: GamepadMapping) => {
-    [...axisControls, ...buttonControls].forEach(([key, id]) => {
-      must<HTMLSelectElement>(id).value = String(mapping[key]);
-    });
+    must(bindingLabels.steer).textContent = formatAxisBinding(mapping.steer);
+    must(bindingLabels.accelerator).textContent = formatControlBinding(mapping.accelerator);
+    must(bindingLabels.brake).textContent = formatControlBinding(mapping.brake);
+    must(bindingLabels.acc).textContent = formatButtonBinding(mapping.acc);
+    must(bindingLabels.lca).textContent = formatButtonBinding(mapping.lca);
   };
 
-  const readMappingFromUi = (): Partial<GamepadMapping> => {
-    const mapping: Partial<GamepadMapping> = {};
-    [...axisControls, ...buttonControls].forEach(([key, id]) => {
-      mapping[key] = Number(must<HTMLSelectElement>(id).value);
+  const stopCapture = (message?: string) => {
+    if (captureInterval !== null) window.clearInterval(captureInterval);
+    if (captureTimeout !== null) window.clearTimeout(captureTimeout);
+    captureInterval = null;
+    captureTimeout = null;
+    activeControl = null;
+    document.querySelectorAll<HTMLElement>("[data-gamepad-assign]").forEach((button) => button.classList.remove("active"));
+    if (message) status.textContent = message;
+  };
+
+  const readPad = (): Gamepad | null => {
+    if (typeof navigator === "undefined") return null;
+    return navigator.getGamepads?.().find(Boolean) ?? null;
+  };
+
+  const snapshotPad = (pad: Gamepad): PadSnapshot => ({
+    axes: [...pad.axes],
+    buttons: pad.buttons.map((button) => button.value)
+  });
+
+  const detectAxis = (pad: Gamepad, baseline: PadSnapshot): GamepadAxisBinding | null => {
+    let bestIndex = -1;
+    let bestDelta = 0;
+    pad.axes.forEach((value, index) => {
+      const delta = Math.abs(value - (baseline.axes[index] ?? 0));
+      if (delta > bestDelta && Math.abs(value) > 0.28) {
+        bestDelta = delta;
+        bestIndex = index;
+      }
     });
-    return mapping;
+    return bestIndex >= 0 && bestDelta > 0.32 ? { kind: "axis", index: bestIndex } : null;
+  };
+
+  const detectButton = (pad: Gamepad, baseline: PadSnapshot): GamepadButtonBinding | null => {
+    for (let index = 0; index < pad.buttons.length; index++) {
+      const button = pad.buttons[index];
+      const baselineValue = baseline.buttons[index] ?? 0;
+      if ((button.pressed || button.value > 0.5) && baselineValue <= 0.15) return { kind: "button", index };
+    }
+    return null;
+  };
+
+  const detectBinding = (control: AssignControl, baseline: PadSnapshot): GamepadAxisBinding | GamepadButtonBinding | null => {
+    const pad = readPad();
+    if (!pad) return null;
+    if (control === "steer") return detectAxis(pad, baseline);
+    if (control === "acc" || control === "lca") return detectButton(pad, baseline);
+    return detectButton(pad, baseline) ?? detectAxis(pad, baseline);
+  };
+
+  const mappingPatch = (control: AssignControl, binding: GamepadAxisBinding | GamepadButtonBinding): Partial<GamepadMapping> | null => {
+    if (control === "steer") return binding.kind === "axis" ? { steer: binding } : null;
+    if (control === "accelerator") return { accelerator: binding };
+    if (control === "brake") return { brake: binding };
+    if (control === "acc") return binding.kind === "button" ? { acc: binding } : null;
+    return binding.kind === "button" ? { lca: binding } : null;
+  };
+
+  const startCapture = (control: AssignControl, button: HTMLElement) => {
+    stopCapture();
+    activeControl = control;
+    button.classList.add("active");
+    const pad = readPad();
+    const baseline = pad ? snapshotPad(pad) : { axes: [], buttons: [] };
+    status.textContent = `Assigning ${control.toUpperCase()}`;
+    captureInterval = window.setInterval(() => {
+      if (!activeControl) return;
+      const binding = detectBinding(activeControl, baseline);
+      if (!binding) return;
+      const patch = mappingPatch(activeControl, binding);
+      if (!patch) return;
+      actions.onGamepadMappingChange(patch);
+      writeMappingToUi(actions.getGamepadMapping());
+      stopCapture(`${activeControl.toUpperCase()} ${formatAnyBinding(binding)}`);
+    }, 60);
+    captureTimeout = window.setTimeout(() => stopCapture("Assignment timed out"), 8000);
   };
 
   writeMappingToUi(actions.getGamepadMapping());
-  [...axisControls, ...buttonControls].forEach(([, id]) => {
-    must<HTMLSelectElement>(id).addEventListener("change", () => actions.onGamepadMappingChange(readMappingFromUi()));
+  document.querySelectorAll<HTMLElement>("[data-gamepad-assign]").forEach((button) => {
+    const control = button.dataset.gamepadAssign as AssignControl;
+    button.addEventListener("click", () => startCapture(control, button));
   });
-  must("gamepadReset").addEventListener("click", () => writeMappingToUi(actions.onGamepadMappingReset()));
+  must("gamepadReset").addEventListener("click", () => {
+    stopCapture("Mapping reset");
+    writeMappingToUi(actions.onGamepadMappingReset());
+  });
+}
+
+function formatControlBinding(binding: GamepadControlBinding): string {
+  return binding.kind === "axis" ? formatAxisBinding(binding) : formatButtonBinding(binding);
+}
+
+function formatAnyBinding(binding: GamepadAxisBinding | GamepadButtonBinding): string {
+  return binding.kind === "axis" ? formatAxisBinding(binding) : formatButtonBinding(binding);
+}
+
+function formatAxisBinding(binding: GamepadAxisBinding): string {
+  return `Axis ${binding.index}${binding.invert ? " inverted" : ""}`;
+}
+
+function formatButtonBinding(binding: GamepadButtonBinding): string {
+  return `Button ${binding.index}`;
 }
 
 function setupPhysicsToggle(): void {
@@ -469,10 +563,6 @@ function setupPhysicsToggle(): void {
     toggle.setAttribute("aria-expanded", String(open));
     label.textContent = open ? "Close" : "Open";
   });
-}
-
-function populateSelect(select: HTMLSelectElement, label: string, count: number): void {
-  select.innerHTML = Array.from({ length: count }, (_, index) => `<option value="${index}">${label} ${index}</option>`).join("");
 }
 
 function updateLogPreview(snapshot: SimSnapshot): void {

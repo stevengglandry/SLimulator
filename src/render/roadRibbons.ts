@@ -76,6 +76,8 @@ type GuardrailLine = {
   dashed: boolean;
 };
 
+type LateralSource = number | ((s: number) => number);
+
 const ROAD_SAMPLE_COUNT_HIGH = 160;
 const ROAD_SAMPLE_COUNT_PERF = 96;
 const ROAD_SAMPLE_COUNT_MAX = ROAD_SAMPLE_COUNT_HIGH;
@@ -89,6 +91,10 @@ const LANE_DASH_CYCLE_M = LANE_DASH_SIZE_M + LANE_DASH_GAP_M;
 function smooth01(value: number): number {
   const t = Math.max(0, Math.min(1, value));
   return t * t * (3 - 2 * t);
+}
+
+function resolveLateral(source: LateralSource, s: number): number {
+  return typeof source === "function" ? source(s) : source;
 }
 
 export function roadRibbonSettings(mode: RenderQuality): { sampleCount: number; spacing: number; backDistance: number } {
@@ -154,8 +160,8 @@ export class RoadRibbonSystem {
     const base = Math.floor((snapshot.vehicle.roadPositionM - settings.backDistance) / settings.spacing) * settings.spacing;
     const guardrailBase = Math.floor((snapshot.vehicle.roadPositionM - guardrailSettings.backDistance) / guardrailSettings.spacing) * guardrailSettings.spacing;
     const transition = snapshot.road.transition;
-    const transitionBucket = transition ? Math.floor(transition.progress * 24) : 0;
-    const updateKey = `${this.qualityMode}:${base}:${guardrailBase}:${snapshot.road.scene}:${transition?.from ?? ""}:${transition?.to ?? ""}:${transitionBucket}`;
+    const transitionKey = transition ? `${transition.from}:${transition.to}:${Math.floor(transition.progress * 1000)}` : "";
+    const updateKey = `${this.qualityMode}:${base}:${guardrailBase}:${snapshot.road.scene}:${transitionKey}`;
     if (updateKey === this.lastUpdateKey) return;
     this.lastUpdateKey = updateKey;
 
@@ -165,49 +171,59 @@ export class RoadRibbonSystem {
 
     const samples = this.roadSamples;
     const guardrailSamples = this.guardrailSamples;
-    const bounds = this.road.boundsAt(snapshot.vehicle.roadPositionM);
-    this.updateRibbon(this.ribbons.ground, samples, settings.sampleCount, bounds.leftWall - 60, bounds.rightWall + 60, -0.18);
-    this.updateRibbon(this.ribbons.road, samples, settings.sampleCount, bounds.leftEdge, bounds.rightEdge, 0.02);
-    this.updateRibbon(this.ribbons.shoulderL, samples, settings.sampleCount, bounds.leftEdge - config.shoulderWidth, bounds.leftEdge, 0.012);
-    this.updateRibbon(this.ribbons.shoulderR, samples, settings.sampleCount, bounds.rightEdge, bounds.rightEdge + config.shoulderWidth, 0.012);
+    const boundsAt = (s: number) => this.road.boundsAt(s);
+    const bounds = boundsAt(snapshot.vehicle.roadPositionM);
+    this.updateRibbon(this.ribbons.ground, samples, settings.sampleCount, (s) => boundsAt(s).leftWall - 60, (s) => boundsAt(s).rightWall + 60, -0.18);
+    this.updateRibbon(this.ribbons.road, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge, (s) => boundsAt(s).rightEdge, 0.02);
+    this.updateRibbon(this.ribbons.shoulderL, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge - config.shoulderWidth, (s) => boundsAt(s).leftEdge, 0.012);
+    this.updateRibbon(this.ribbons.shoulderR, samples, settings.sampleCount, (s) => boundsAt(s).rightEdge, (s) => boundsAt(s).rightEdge + config.shoulderWidth, 0.012);
 
-    this.updateRibbon(this.ribbons.roadSheen, samples, settings.sampleCount, bounds.leftEdge + 0.08, bounds.rightEdge - 0.08, 0.043);
-    this.updateRibbon(this.ribbons.shoulderGlowL, samples, settings.sampleCount, bounds.leftEdge - 0.24, bounds.leftEdge + 0.08, 0.062);
-    this.updateRibbon(this.ribbons.shoulderGlowR, samples, settings.sampleCount, bounds.rightEdge - 0.08, bounds.rightEdge + 0.24, 0.062);
-    this.updateRibbon(this.ribbons.wallL, samples, settings.sampleCount, bounds.leftWall - 0.14, bounds.leftWall + 0.14, 0.46);
-    this.updateRibbon(this.ribbons.wallR, samples, settings.sampleCount, bounds.rightWall - 0.14, bounds.rightWall + 0.14, 0.46);
-    this.updateVerticalRibbon(this.ribbons.guardrailFaceL, guardrailSamples, guardrailSettings.sampleCount, bounds.leftWall, 0.5, 0.82);
-    this.updateVerticalRibbon(this.ribbons.guardrailFaceR, guardrailSamples, guardrailSettings.sampleCount, bounds.rightWall, 0.5, 0.82);
-    this.updateGuardrailLine(this.guardrailLines.left, guardrailSamples, guardrailSettings.sampleCount, bounds.leftWall, 0.86, snapshot.vehicle.roadPositionM);
-    this.updateGuardrailLine(this.guardrailLines.right, guardrailSamples, guardrailSettings.sampleCount, bounds.rightWall, 0.86, snapshot.vehicle.roadPositionM);
+    this.updateRibbon(this.ribbons.roadSheen, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge + 0.08, (s) => boundsAt(s).rightEdge - 0.08, 0.043);
+    this.updateRibbon(this.ribbons.shoulderGlowL, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge - 0.24, (s) => boundsAt(s).leftEdge + 0.08, 0.062);
+    this.updateRibbon(this.ribbons.shoulderGlowR, samples, settings.sampleCount, (s) => boundsAt(s).rightEdge - 0.08, (s) => boundsAt(s).rightEdge + 0.24, 0.062);
+    this.updateRibbon(this.ribbons.wallL, samples, settings.sampleCount, (s) => boundsAt(s).leftWall - 0.14, (s) => boundsAt(s).leftWall + 0.14, 0.46);
+    this.updateRibbon(this.ribbons.wallR, samples, settings.sampleCount, (s) => boundsAt(s).rightWall - 0.14, (s) => boundsAt(s).rightWall + 0.14, 0.46);
+    this.updateVerticalRibbon(this.ribbons.guardrailFaceL, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).leftWall, 0.5, 0.82);
+    this.updateVerticalRibbon(this.ribbons.guardrailFaceR, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).rightWall, 0.5, 0.82);
+    this.updateGuardrailLine(this.guardrailLines.left, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).leftWall, 0.86, snapshot.vehicle.roadPositionM);
+    this.updateGuardrailLine(this.guardrailLines.right, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).rightWall, 0.86, snapshot.vehicle.roadPositionM);
 
     this.ribbons.urbanFacadeL.mesh.visible = false;
     this.ribbons.urbanFacadeR.mesh.visible = false;
 
-    this.updateGuardrailLine(this.markingLines.edgeL, guardrailSamples, guardrailSettings.sampleCount, bounds.leftEdge + 0.06, 0.076, snapshot.vehicle.roadPositionM);
-    this.updateGuardrailLine(this.markingLines.edgeR, guardrailSamples, guardrailSettings.sampleCount, bounds.rightEdge - 0.06, 0.076, snapshot.vehicle.roadPositionM);
+    this.updateGuardrailLine(this.markingLines.edgeL, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).leftEdge + 0.06, 0.076, snapshot.vehicle.roadPositionM);
+    this.updateGuardrailLine(this.markingLines.edgeR, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).rightEdge - 0.06, 0.076, snapshot.vehicle.roadPositionM);
     this.updateGuardrailLine(this.markingLines.centerL, guardrailSamples, guardrailSettings.sampleCount, -0.17, 0.082, snapshot.vehicle.roadPositionM);
     this.updateGuardrailLine(this.markingLines.centerR, guardrailSamples, guardrailSettings.sampleCount, 0.17, 0.082, snapshot.vehicle.roadPositionM);
 
     for (let i = 0; i < this.laneLines.length; i++) {
       this.laneLines[i].line.visible = false;
     }
-    const activeLanes = bounds.laneCount;
     let ribbonIdx = 0;
-    for (let i = 0; i < activeLanes - 1; i++) {
+    const farSampleS = guardrailSamples[Math.max(0, guardrailSettings.sampleCount - 1)] ?? snapshot.vehicle.roadPositionM;
+    for (let i = 0; i < 3; i++) {
+      const dividerThreshold = i + 1;
+      const visibleDividerLaneFloat = Math.max(bounds.laneFloat, this.road.laneFloat(farSampleS));
+      const dividerAlpha = smooth01((visibleDividerLaneFloat - dividerThreshold) / 0.4);
+      if (dividerAlpha <= 0.01) {
+        ribbonIdx += 2;
+        continue;
+      }
       // Left side lane divider
       const offsetL = -config.laneWidth * (i + 1);
       if (ribbonIdx < this.laneLines.length) {
         const lineL = this.laneLines[ribbonIdx++];
         lineL.line.visible = true;
-        this.updateGuardrailLine(lineL, guardrailSamples, guardrailSettings.sampleCount, offsetL, 0.086, snapshot.vehicle.roadPositionM);
+        lineL.line.material.opacity = 0.7 * dividerAlpha;
+        this.updateGuardrailLine(lineL, guardrailSamples, guardrailSettings.sampleCount, offsetL, 0.086, snapshot.vehicle.roadPositionM, (s) => this.road.laneFloat(s) > dividerThreshold + 0.03);
       }
       // Right side lane divider
       const offsetR = config.laneWidth * (i + 1);
       if (ribbonIdx < this.laneLines.length) {
         const lineR = this.laneLines[ribbonIdx++];
         lineR.line.visible = true;
-        this.updateGuardrailLine(lineR, guardrailSamples, guardrailSettings.sampleCount, offsetR, 0.086, snapshot.vehicle.roadPositionM);
+        lineR.line.material.opacity = 0.7 * dividerAlpha;
+        this.updateGuardrailLine(lineR, guardrailSamples, guardrailSettings.sampleCount, offsetR, 0.086, snapshot.vehicle.roadPositionM, (s) => this.road.laneFloat(s) > dividerThreshold + 0.03);
       }
     }
   }
@@ -295,8 +311,9 @@ export class RoadRibbonSystem {
       urbanFacadeR: this.createRibbon(sampleCount, facadeMaterial, "urbanFacadeR")
     };
     for (let i = 0; i < 6; i++) {
+      const material = laneDivider.clone();
       this.laneLines.push(
-        this.createGuardrailLine(GUARDRAIL_SAMPLE_COUNT_MAX, laneDivider, `lane${i}`, {
+        this.createGuardrailLine(GUARDRAIL_SAMPLE_COUNT_MAX, material, `lane${i}`, {
           dashed: true,
           renderOrder: 4,
           nearColor: 0xe1f8f1,
@@ -411,15 +428,15 @@ export class RoadRibbonSystem {
     ribbon: Ribbon,
     samples: ArrayLike<number>,
     activeSampleCount: number,
-    left: number,
-    right: number,
+    left: LateralSource,
+    right: LateralSource,
     y: number,
     vScale?: number
   ): void {
     for (let i = 0; i < activeSampleCount; i++) {
       const s = samples[i];
-      const l = this.road.worldFromRoad(s, left, y);
-      const r = this.road.worldFromRoad(s, right, y);
+      const l = this.road.worldFromRoad(s, resolveLateral(left, s), y);
+      const r = this.road.worldFromRoad(s, resolveLateral(right, s), y);
       const p = i * 6;
       ribbon.positions[p] = l.x;
       ribbon.positions[p + 1] = l.y;
@@ -441,11 +458,12 @@ export class RoadRibbonSystem {
     uv.needsUpdate = true;
   }
 
-  private updateVerticalRibbon(ribbon: Ribbon, samples: ArrayLike<number>, activeSampleCount: number, lateral: number, bottomY: number, topY: number): void {
+  private updateVerticalRibbon(ribbon: Ribbon, samples: ArrayLike<number>, activeSampleCount: number, lateral: LateralSource, bottomY: number, topY: number): void {
     for (let i = 0; i < activeSampleCount; i++) {
       const s = samples[i];
-      const bottom = this.road.worldFromRoad(s, lateral, bottomY);
-      const top = this.road.worldFromRoad(s, lateral, topY);
+      const resolvedLateral = resolveLateral(lateral, s);
+      const bottom = this.road.worldFromRoad(s, resolvedLateral, bottomY);
+      const top = this.road.worldFromRoad(s, resolvedLateral, topY);
       const p = i * 6;
       ribbon.positions[p] = bottom.x;
       ribbon.positions[p + 1] = bottom.y;
@@ -467,11 +485,36 @@ export class RoadRibbonSystem {
     uv.needsUpdate = true;
   }
 
-  private updateGuardrailLine(line: GuardrailLine, samples: ArrayLike<number>, activeSampleCount: number, lateral: number, y: number, originS: number): void {
-    const count = Math.min(activeSampleCount, line.maxSampleCount);
+  private updateGuardrailLine(
+    line: GuardrailLine,
+    samples: ArrayLike<number>,
+    activeSampleCount: number,
+    lateral: LateralSource,
+    y: number,
+    originS: number,
+    visibleAt?: (s: number) => boolean
+  ): void {
+    const sourceCount = Math.min(activeSampleCount, line.maxSampleCount);
+    let firstSample = 0;
+    let lastSample = sourceCount - 1;
+    if (visibleAt) {
+      firstSample = -1;
+      lastSample = -1;
+      for (let i = 0; i < sourceCount; i++) {
+        if (!visibleAt(samples[i])) continue;
+        if (firstSample < 0) firstSample = i;
+        lastSample = i;
+      }
+      if (firstSample < 0) {
+        line.geometry.setPositions(line.positions.subarray(0, 0));
+        if (line.colors) line.geometry.setColors(line.colors.subarray(0, 0));
+        return;
+      }
+    }
+    const count = Math.max(0, lastSample - firstSample + 1);
     for (let i = 0; i < count; i++) {
-      const s = samples[i];
-      const point = this.road.worldFromRoad(s, lateral, y);
+      const s = samples[firstSample + i];
+      const point = this.road.worldFromRoad(s, resolveLateral(lateral, s), y);
       const p = i * 3;
       line.positions[p] = point.x;
       line.positions[p + 1] = point.y;

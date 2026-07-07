@@ -4,23 +4,19 @@ import { clamp, hash01, lerp, normalizeAngle, smoothstep, TAU } from "../shared/
 
 export class RoadModel {
   scene: SceneKey = "unmapped";
-  visualFrom: SceneKey = "unmapped";
-  visualTo: SceneKey = "unmapped";
   transition: RoadTransition | null = null;
-  queue: Array<{ target: SceneKey; transitionMs: number }> = [];
+  queue: Array<{ target: SceneKey }> = [];
 
   constructor(public seed: number) {}
 
   reset(scene: SceneKey = "unmapped", seed = this.seed): void {
     this.seed = seed >>> 0;
     this.scene = scene;
-    this.visualFrom = scene;
-    this.visualTo = scene;
     this.transition = null;
     this.queue = [];
   }
 
-  requestScene(target: SceneKey, transitionMs: number = config.transitionMs): "queued" | "started" | "noop" {
+  requestScene(target: SceneKey, _transitionMs?: number, currentS = 0): "queued" | "started" | "noop" {
     if (!SCENES[target]) throw new Error(`Unknown scene: ${target}`);
     if (!this.transition && target === this.scene) return "noop";
     const last = this.queue[this.queue.length - 1];
@@ -28,37 +24,37 @@ export class RoadModel {
       return "noop";
     }
     if (this.transition) {
-      this.queue.push({ target, transitionMs });
+      this.queue.push({ target });
       return "queued";
     }
-    this.beginTransition(target, transitionMs);
+    this.beginTransition(target, currentS);
     return "started";
   }
 
-  beginTransition(target: SceneKey, transitionMs: number = config.transitionMs): void {
+  beginTransition(target: SceneKey, currentS = 0): void {
+    const originS = Math.max(0, currentS);
+    const taperStartS = originS + config.sceneTransitionLeadM;
     this.transition = {
       from: this.scene,
       to: target,
       progress: 0,
-      duration: clamp(transitionMs, 1000, 60000) / 1000
+      originS,
+      taperStartS,
+      lockS: taperStartS + config.sceneTransitionTaperM
     };
-    this.visualFrom = this.scene;
-    this.visualTo = target;
   }
 
-  update(dt: number): { completed?: { from: SceneKey; to: SceneKey }; started?: SceneKey } {
+  update(_dt: number, currentS = 0): { completed?: { from: SceneKey; to: SceneKey }; started?: SceneKey } {
     if (!this.transition) return {};
-    this.transition.progress = clamp(this.transition.progress + dt / this.transition.duration, 0, 1);
-    if (this.transition.progress < 1) return {};
+    this.transition.progress = clamp((currentS - this.transition.originS) / Math.max(1, this.transition.lockS - this.transition.originS), 0, 1);
+    if (currentS < this.transition.lockS) return {};
     const from = this.transition.from;
     const to = this.transition.to;
     this.scene = to;
-    this.visualFrom = to;
-    this.visualTo = to;
     this.transition = null;
     if (this.queue.length) {
       const next = this.queue.shift()!;
-      this.beginTransition(next.target, next.transitionMs);
+      this.beginTransition(next.target, currentS);
       return { completed: { from, to }, started: next.target };
     }
     return { completed: { from, to } };
@@ -68,29 +64,41 @@ export class RoadModel {
     return this.transition?.to ?? this.scene;
   }
 
-  sceneBlend(): { from: SceneKey; to: SceneKey; t: number } {
-    if (!this.transition) return { from: this.scene, to: this.scene, t: 0 };
-    return { from: this.transition.from, to: this.transition.to, t: smoothstep(this.transition.progress) };
+  transitionTAt(s: number): number {
+    if (!this.transition) return 0;
+    return smoothstep((s - this.transition.taperStartS) / Math.max(1, this.transition.lockS - this.transition.taperStartS));
   }
 
-  sceneValue(key: keyof Omit<(typeof SCENES)[SceneKey], "label">): number {
-    const blend = this.sceneBlend();
-    return lerp(SCENES[blend.from][key], SCENES[blend.to][key], blend.t);
+  scenePairAt(): { from: SceneKey; to: SceneKey } {
+    if (!this.transition) return { from: this.scene, to: this.scene };
+    return { from: this.transition.from, to: this.transition.to };
   }
 
-  laneCount(): number {
-    const blend = this.sceneBlend();
-    const lanesFrom = SCENES[blend.from].lanes;
-    const lanesTo = SCENES[blend.to].lanes;
-    return blend.t >= 0.85 ? lanesTo : lanesFrom;
+  sceneAt(s: number): SceneKey {
+    const pair = this.scenePairAt();
+    return this.transitionTAt(s) >= 0.5 ? pair.to : pair.from;
   }
 
-  laneFloat(): number {
-    return this.sceneValue("lanes");
+  scenerySceneAt(s: number): SceneKey {
+    if (!this.transition) return this.scene;
+    return s >= this.transition.taperStartS ? this.transition.to : this.scene;
+  }
+
+  roadValueAt(key: keyof Omit<(typeof SCENES)[SceneKey], "label">, s: number): number {
+    const pair = this.scenePairAt();
+    return lerp(SCENES[pair.from][key], SCENES[pair.to][key], this.transitionTAt(s));
+  }
+
+  laneCount(s = 0): number {
+    return SCENES[this.sceneAt(s)].lanes;
+  }
+
+  laneFloat(s = 0): number {
+    return this.roadValueAt("lanes", s);
   }
 
   frameAt(s: number): RoadFrame {
-    const amp = this.sceneValue("curveAmp");
+    const amp = this.roadValueAt("curveAmp", s);
     const wave = config.routeWaveMeters;
     const seedPhase = (this.seed % 4096) / 4096 * TAU;
     const a = s / wave * TAU + seedPhase;
@@ -144,13 +152,13 @@ export class RoadModel {
     };
   }
 
-  boundsAt(_s = 0): RoadBounds {
-    const laneFloat = this.laneFloat();
-    const laneCount = this.laneCount();
+  boundsAt(s = 0): RoadBounds {
+    const laneFloat = this.laneFloat(s);
+    const laneCount = this.laneCount(s);
     const roadWidth = 2 * laneFloat * config.laneWidth;
     const leftEdge = -laneFloat * config.laneWidth;
     const rightEdge = laneFloat * config.laneWidth;
-    const guardrailDistance = this.sceneValue("guardrailDistance");
+    const guardrailDistance = this.roadValueAt("guardrailDistance", s);
     const laneCenters = Array.from({ length: laneCount }, (_, i) => {
       return config.laneWidth * (i + 0.5);
     });
@@ -162,13 +170,13 @@ export class RoadModel {
       leftWall: leftEdge - guardrailDistance,
       rightWall: rightEdge + guardrailDistance,
       roadWidth,
-      medianWidth: this.sceneValue("median"),
+      medianWidth: this.roadValueAt("median", s),
       laneCenters
     };
   }
 
-  nearestLane(lateral: number): LaneInfo {
-    const centers = this.boundsAt().laneCenters;
+  nearestLane(lateral: number, s = 0): LaneInfo {
+    const centers = this.boundsAt(s).laneCenters;
     let index = 0;
     let best = Number.POSITIVE_INFINITY;
     for (let i = 0; i < centers.length; i++) {
@@ -196,7 +204,7 @@ export class RoadModel {
     return {
       lateral,
       side: side < 0 ? "left" : "right",
-      active: this.sceneValue("crosswalks") > 0.3
+      active: this.roadValueAt("crosswalks", segment * 16) > 0.3
     };
   }
 }
