@@ -1,6 +1,0 @@
-*.png
-SLimulator requirements.txt
-node_modules/
-dist/
-*.log
-output/
