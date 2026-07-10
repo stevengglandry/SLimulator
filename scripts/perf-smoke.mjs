@@ -27,6 +27,7 @@ async function main() {
   await waitForUrl(url);
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.addInitScript(() => localStorage.setItem("slimulator-render-quality", "perf"));
   const consoleMessages = [];
   page.on("console", (message) => {
     if (["warning", "error"].includes(message.type())) consoleMessages.push({ type: message.type(), text: message.text() });
@@ -50,7 +51,9 @@ async function main() {
   }
 
   await page.keyboard.up("w");
-  console.log(JSON.stringify({ url, secondsPerScene, results, consoleMessages }, null, 2));
+  const postProcessingLoaded = await page.evaluate(() => performance.getEntriesByType("resource")
+    .some((entry) => /postProcessing|EffectComposer|UnrealBloomPass|FXAAShader/.test(entry.name)));
+  console.log(JSON.stringify({ url, secondsPerScene, results, postProcessingLoaded, consoleMessages }, null, 2));
 }
 
 async function waitForUrl(target) {

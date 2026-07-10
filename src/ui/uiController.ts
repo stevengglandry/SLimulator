@@ -1,10 +1,11 @@
 import { config, SCENES } from "../game/config";
 import { createLogText } from "../game/logging";
-import type { CameraMode, DriverInputSource, SceneKey, SimSnapshot } from "../game/types";
+import type { CameraMode, DriverInputSource, RenderQuality, SceneKey, SimSnapshot } from "../game/types";
 import type { GamepadAxisBinding, GamepadButtonBinding, GamepadControlBinding, GamepadMapping } from "../input/inputManager";
 import { fixed, formatTime } from "../shared/math";
 
 export interface UiActions {
+  initialQuality: RenderQuality;
   onScene(scene: SceneKey): void;
   onNewSession(): void;
   onToggleACC(): void;
@@ -120,8 +121,8 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
         <section class="section">
           <p class="section-title">Render</p>
           <div class="grid-2">
-            <button class="btn micro quality-btn active" data-quality="high" type="button">High</button>
-            <button class="btn micro quality-btn" data-quality="perf" type="button">Perf</button>
+            <button class="btn micro quality-btn${actions.initialQuality === "high" ? " active" : ""}" data-quality="high" type="button">High</button>
+            <button class="btn micro quality-btn${actions.initialQuality === "perf" ? " active" : ""}" data-quality="perf" type="button">Perf</button>
           </div>
         </section>
         <section class="section">

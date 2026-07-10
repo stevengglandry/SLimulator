@@ -7,21 +7,15 @@ import {
   PerspectiveCamera,
   Scene,
   SRGBColorSpace,
-  Vector2,
   Vector3,
   WebGLRenderer
 } from "three";
-import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
-import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
 import { RoadModel } from "../game/route";
 import type { CameraMode, RenderQuality, SimSnapshot } from "../game/types";
 import type { PerfRecorder, RendererPerfStats } from "../diagnostics/perf";
 import { VehiclePhysics } from "../physics/vehiclePhysics";
 import { AtmosphereSystem } from "./atmosphere";
+import type { PostProcessingPipeline } from "./postProcessing";
 import { RoadRibbonSystem } from "./roadRibbons";
 import { ScenerySystem } from "./scenerySystem";
 import { VehicleVisual } from "./vehicleVisual";
@@ -31,9 +25,8 @@ export class WorldRenderer {
   readonly scene: Scene;
   readonly camera: PerspectiveCamera;
 
-  private readonly composer: EffectComposer;
-  private readonly bloom: UnrealBloomPass;
-  private readonly fxaa: ShaderPass;
+  private postProcessing: PostProcessingPipeline | null = null;
+  private postProcessingPromise: Promise<void> | null = null;
   private readonly atmosphere: AtmosphereSystem;
   private readonly roadRibbons: RoadRibbonSystem;
   private readonly scenery: ScenerySystem;
@@ -51,7 +44,10 @@ export class WorldRenderer {
   private qualityMode: RenderQuality = "high";
 
   constructor(canvas: HTMLCanvasElement, private readonly road: RoadModel, private readonly physics: VehiclePhysics) {
-    this.renderer = new WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: "high-performance" });
+    // FXAA handles high-mode edge smoothing. Leaving browser MSAA off keeps the
+    // perf path from paying an immutable multisample cost after post-processing
+    // has been disabled.
+    this.renderer = new WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.7));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
@@ -62,14 +58,7 @@ export class WorldRenderer {
     this.camera = new PerspectiveCamera(68, 1, 0.08, 1800);
     this.camera.rotation.order = "YXZ";
 
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new Vector2(1, 1), 0.14, 0.28, 0.75);
-    this.composer.addPass(this.bloom);
-    this.fxaa = new ShaderPass(FXAAShader);
-    this.composer.addPass(this.fxaa);
-    this.composer.addPass(new OutputPass());
-    this.atmosphere = new AtmosphereSystem(this.scene, this.road, this.renderer, this.bloom);
+    this.atmosphere = new AtmosphereSystem(this.scene, this.road, this.renderer);
 
     this.addLights();
     this.roadRibbons = new RoadRibbonSystem(this.scene, this.road);
@@ -93,19 +82,20 @@ export class WorldRenderer {
     this.vehicleVisual.setCameraMode(mode);
   }
 
-  setHighQuality(high: boolean): void {
-    this.setQualityMode(high ? "high" : "perf");
-  }
-
   setQualityMode(mode: RenderQuality): void {
     this.qualityMode = mode;
     this.renderer.setPixelRatio(mode === "high" ? Math.min(window.devicePixelRatio || 1, 1.7) : 1);
     this.renderer.shadowMap.enabled = false;
-    this.bloom.enabled = mode === "high";
-    this.fxaa.enabled = mode === "high";
+    if (this.postProcessing) {
+      this.postProcessing.bloom.enabled = mode === "high";
+      this.postProcessing.fxaa.enabled = mode === "high";
+    } else if (mode === "high") {
+      this.ensurePostProcessing();
+    }
     this.roadRibbons.setQualityMode(mode);
     this.scenery.setQualityMode(mode);
     this.atmosphere.setQualityMode(mode);
+    document.documentElement.dataset.renderQuality = mode;
     this.resize();
   }
 
@@ -114,9 +104,7 @@ export class WorldRenderer {
     const width = canvas.clientWidth || window.innerWidth;
     const height = canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(width, height, false);
-    this.composer.setPixelRatio(this.renderer.getPixelRatio());
-    this.composer.setSize(width, height);
-    this.fxaa.uniforms.resolution.value.set(1 / Math.max(1, width * this.renderer.getPixelRatio()), 1 / Math.max(1, height * this.renderer.getPixelRatio()));
+    this.postProcessing?.resize(width, height, this.renderer.getPixelRatio());
     this.camera.aspect = width / Math.max(1, height);
     this.camera.updateProjectionMatrix();
   }
@@ -128,7 +116,7 @@ export class WorldRenderer {
     this.measure(perf, "scenery", () => this.scenery.update(snapshot, timeSeconds));
     this.measure(perf, "vehicle", () => this.vehicleVisual.update(snapshot, timeSeconds));
     this.measure(perf, "camera", () => this.updateCamera(snapshot, now));
-    if (this.qualityMode === "high") this.composer.render();
+    if (this.qualityMode === "high" && this.postProcessing) this.postProcessing.render();
     else this.renderer.render(this.scene, this.camera);
   }
 
@@ -157,14 +145,33 @@ export class WorldRenderer {
   }
 
   private addLights(): void {
-    this.scene.add(new AmbientLight(0xa8d7d8, 0.34));
-    const hemi = new HemisphereLight(0x9be0dc, 0x1f4b3f, 0.86);
+    this.scene.add(new AmbientLight(0xc8d4d5, 0.3));
+    const hemi = new HemisphereLight(0xb9d9e6, 0x3d503f, 0.9);
     this.scene.add(hemi);
-    const sun = new DirectionalLight(0xffe6aa, 0.54);
+    const sun = new DirectionalLight(0xffdfad, 0.7);
     sun.position.set(-90, 115, -55);
     sun.castShadow = false;
     this.scene.add(sun);
     this.scene.add(sun.target);
+  }
+
+  private ensurePostProcessing(): void {
+    if (this.postProcessing || this.postProcessingPromise) return;
+    this.postProcessingPromise = import("./postProcessing")
+      .then(({ createPostProcessing }) => {
+        this.postProcessing = createPostProcessing(this.renderer, this.scene, this.camera);
+        this.atmosphere.setBloomControl(this.postProcessing.bloom);
+        const highQuality = this.qualityMode === "high";
+        this.postProcessing.bloom.enabled = highQuality;
+        this.postProcessing.fxaa.enabled = highQuality;
+        this.resize();
+      })
+      .catch((error: unknown) => {
+        console.warn("SLimulator high-quality effects unavailable", error);
+      })
+      .finally(() => {
+        this.postProcessingPromise = null;
+      });
   }
 
   private measure(stageTimer: PerfRecorder | undefined, stage: Parameters<PerfRecorder["measure"]>[0], fn: () => void): void {

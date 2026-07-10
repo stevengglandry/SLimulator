@@ -56,7 +56,7 @@ button {
   height: 100%;
   display: block;
   outline: 0;
-  background: #438a91;
+  background: #6f9ca9;
 }
 
 .vignette {
@@ -270,6 +270,26 @@ button {
 .field input:focus,
 .field select:focus {
   border-color: rgba(124, 231, 211, 0.72);
+}
+
+/* Perf mode keeps the same translucent palette without forcing the browser to
+   blur a constantly changing WebGL surface behind every HUD panel. */
+:root[data-render-quality="perf"] .glass,
+:root[data-render-quality="perf"] .cluster,
+:root[data-render-quality="perf"] .mobile-touch-overlay .touch-btn {
+  backdrop-filter: none;
+}
+
+:root[data-render-quality="perf"] .vignette {
+  display: none;
+}
+
+:root[data-render-quality="perf"] .glass,
+:root[data-render-quality="perf"] .dash,
+:root[data-render-quality="perf"] .cluster,
+:root[data-render-quality="perf"] .steering-wheel,
+:root[data-render-quality="perf"] .mobile-touch-overlay .touch-btn {
+  box-shadow: none;
 }
 
 .compact-fields {

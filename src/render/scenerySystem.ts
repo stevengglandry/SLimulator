@@ -283,41 +283,44 @@ export class ScenerySystem {
 
   constructor(private readonly scene: Scene, private readonly road: RoadModel) {
     const buildingTex = createBuildingTexture();
-    this.buildingMesh = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ map: buildingTex, color: 0xffffff }), 180, true);
-    this.buildingCaps = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xb4d1ca }), 180, true);
+    const unitBox = new BoxGeometry(1, 1, 1);
+    const foliage = createClumpyFoliageGeometry();
+    const buildingMaterial = new MeshLambertMaterial({ map: buildingTex, color: 0xffffff });
+    this.buildingMesh = this.createInstanced(unitBox, buildingMaterial, 180, true);
+    this.buildingCaps = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xb4d1ca }), 180, true);
     this.treeTrunks = this.createInstanced(new CylinderGeometry(0.45, 0.55, 1, 5), new MeshLambertMaterial({ color: 0x2d5449 }), 180, true);
-    this.treeCrowns = this.createInstanced(createClumpyFoliageGeometry(), new MeshLambertMaterial({ color: 0x3a7c61 }), 260, true);
-    this.roadsideBrush = this.createInstanced(createClumpyFoliageGeometry(), new MeshLambertMaterial({ color: 0x356f56 }), 420, true);
-    this.trafficPoles = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x789ba0 }), 90, true);
-    this.trafficLights = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x102a2e, emissive: new Color(0x5def9a).multiplyScalar(4.2), emissiveIntensity: 1.0 }), 90, false);
-    this.utilityPoles = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x20393d }), 180, true);
-    this.utilityCrossbars = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x1d3438 }), 300, true);
-    this.utilityWires = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshBasicMaterial({ color: 0x0c2025, transparent: true, opacity: 0.72 }), 420, false);
+    this.treeCrowns = this.createInstanced(foliage, new MeshLambertMaterial({ color: 0x3a7c61 }), 260, true);
+    this.roadsideBrush = this.createInstanced(foliage, new MeshLambertMaterial({ color: 0x356f56 }), 420, true);
+    this.trafficPoles = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x789ba0 }), 90, true);
+    this.trafficLights = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x102a2e, emissive: new Color(0x5def9a).multiplyScalar(4.2), emissiveIntensity: 1.0 }), 90, false);
+    this.utilityPoles = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x20393d }), 180, true);
+    this.utilityCrossbars = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x1d3438 }), 300, true);
+    this.utilityWires = this.createInstanced(unitBox, new MeshBasicMaterial({ color: 0x0c2025, transparent: true, opacity: 0.72 }), 420, false);
 
     const streetlightConeGeom = new ConeGeometry(2.2, 5.8, 8, 1, true);
     streetlightConeGeom.translate(0, -2.9, 0);
     this.streetlightCones = this.createInstanced(streetlightConeGeom, createStreetlightConeMaterial(), 180, false);
     this.crosswalkPaint = this.createCrosswalkPaint();
-    this.crosswalkLampPosts = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x8aa9aa }), 64, true);
-    this.crosswalkLampHeads = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xfff0b0, emissive: new Color(0xffdd7a).multiplyScalar(3.8), emissiveIntensity: 1.0 }), 64, false);
-    this.reflectorMesh = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xdaf77f, emissive: new Color(0xd9f05a).multiplyScalar(4.6), emissiveIntensity: 1.0 }), 180, false);
-    this.guardrailPosts = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x7c9293 }), 280, true);
-    this.pedestrianBodies = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xd85b68 }), 48, true);
+    this.crosswalkLampPosts = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x8aa9aa }), 64, true);
+    this.crosswalkLampHeads = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xfff0b0, emissive: new Color(0xffdd7a).multiplyScalar(3.8), emissiveIntensity: 1.0 }), 64, false);
+    this.reflectorMesh = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xdaf77f, emissive: new Color(0xd9f05a).multiplyScalar(4.6), emissiveIntensity: 1.0 }), 180, false);
+    this.guardrailPosts = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x7c9293 }), 280, true);
+    this.pedestrianBodies = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xd85b68 }), 48, true);
     this.pedestrianHeads = this.createInstanced(new SphereGeometry(1, 8, 6), new MeshLambertMaterial({ color: 0xf1c58f }), 48, true);
-    this.pedestrianArms = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xf1c58f }), 96, true);
-    this.pedestrianLegs = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x29333d }), 96, true);
-    this.buildingWings = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ map: buildingTex, color: 0xffffff }), 180, true);
-    this.urbanBlocks = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ map: buildingTex, color: 0xffffff }), 180, true);
-    this.urbanRoofCaps = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x93b4bb }), 180, true);
-    this.shopBuildings = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xcbd7d2 }), 56, true);
-    this.shopAwnings = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x4ea6b1 }), 56, true);
-    this.bulkStores = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xb7c6c9 }), 42, true);
-    this.parkingLots = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x263034 }), 86, false);
-    this.parkingStripes = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshBasicMaterial({ color: 0xd9e2df }), 220, false);
-    this.skyscrapers = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ map: createDenseWindowTexture(this.road.seed), color: 0xffffff }), 54, true);
-    this.billboardPosts = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x223238 }), 120, true);
-    this.speedSignPosts = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xcbd5d2 }), 56, true);
-    this.transitionSignPosts = this.createInstanced(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0x6f8b88 }), 8, true);
+    this.pedestrianArms = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xf1c58f }), 96, true);
+    this.pedestrianLegs = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x29333d }), 96, true);
+    this.buildingWings = this.createInstanced(unitBox, buildingMaterial, 180, true);
+    this.urbanBlocks = this.createInstanced(unitBox, buildingMaterial, 180, true);
+    this.urbanRoofCaps = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x93b4bb }), 180, true);
+    this.shopBuildings = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xcbd7d2 }), 56, true);
+    this.shopAwnings = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x4ea6b1 }), 56, true);
+    this.bulkStores = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xb7c6c9 }), 42, true);
+    this.parkingLots = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x263034 }), 86, false);
+    this.parkingStripes = this.createInstanced(unitBox, new MeshBasicMaterial({ color: 0xd9e2df }), 220, false);
+    this.skyscrapers = this.createInstanced(unitBox, new MeshLambertMaterial({ map: createDenseWindowTexture(this.road.seed), color: 0xffffff }), 54, true);
+    this.billboardPosts = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x223238 }), 120, true);
+    this.speedSignPosts = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xcbd5d2 }), 56, true);
+    this.transitionSignPosts = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x6f8b88 }), 8, true);
     this.billboardMaterials = BILLBOARD_PHRASES.map((phrase, index) => new MeshBasicMaterial({
       map: createBillboardTexture(phrase, this.road.seed + index * 127.3),
       color: 0xb5c2be,
@@ -912,8 +915,9 @@ export class ScenerySystem {
   }
 
   private createPlanePool(pool: Array<Mesh<PlaneGeometry, MeshBasicMaterial>>, count: number, material: MeshBasicMaterial, shadows: boolean): void {
+    const geometry = new PlaneGeometry(1, 1);
     for (let i = 0; i < count; i++) {
-      const mesh = new Mesh(new PlaneGeometry(1, 1), material);
+      const mesh = new Mesh(geometry, material);
       mesh.visible = false;
       mesh.castShadow = shadows;
       mesh.receiveShadow = false;

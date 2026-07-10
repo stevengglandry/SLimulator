@@ -19,7 +19,7 @@ async function boot(): Promise<void> {
   const input = new InputManager(window);
   const perf = new PerfTracker();
   let cameraMode: CameraMode = "cockpit";
-  let qualityMode: RenderQuality = "high";
+  let qualityMode: RenderQuality = preferredQualityMode();
   let previousAccButton = false;
   let previousLcaButton = false;
   let lastGamepadLabel = "No gamepad";
@@ -28,6 +28,7 @@ async function boot(): Promise<void> {
   let renderer: WorldRenderer;
 
   const ui = createUi(root, {
+    initialQuality: qualityMode,
     onScene(scene) {
       simulator.requestScene(scene);
       audio.resume();
@@ -59,6 +60,7 @@ async function boot(): Promise<void> {
     },
     onQuality(high) {
       qualityMode = high ? "high" : "perf";
+      saveQualityMode(qualityMode);
       renderer.setQualityMode(qualityMode);
     },
     onPhysicsChange(key, value) {
@@ -127,6 +129,30 @@ async function boot(): Promise<void> {
   }
 
   requestAnimationFrame(frame);
+}
+
+const QUALITY_STORAGE_KEY = "slimulator-render-quality";
+
+function preferredQualityMode(): RenderQuality {
+  try {
+    const saved = window.localStorage.getItem(QUALITY_STORAGE_KEY);
+    if (saved === "high" || saved === "perf") return saved;
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
+
+  const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const limitedCpu = navigator.hardwareConcurrency > 0 && navigator.hardwareConcurrency <= 4;
+  const limitedMemory = deviceMemory !== undefined && deviceMemory <= 4;
+  return limitedCpu || limitedMemory ? "perf" : "high";
+}
+
+function saveQualityMode(mode: RenderQuality): void {
+  try {
+    window.localStorage.setItem(QUALITY_STORAGE_KEY, mode);
+  } catch {
+    // The selected mode still applies for this session when storage is blocked.
+  }
 }
 
 void boot().catch((error) => {
