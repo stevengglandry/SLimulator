@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RoadModel } from "../game/route";
-import { fillGuardrailRibbonSamples, fillRoadRibbonSamples, guardrailRibbonSettings, laneDashOffsetForSampleBase, laneDividerVisible, roadRibbonSettings } from "./roadRibbons";
+import { fillGuardrailRibbonSamples, fillRoadRibbonSamples, firstLaneDashStart, guardrailRibbonSettings, laneDividerVisible, roadRibbonSettings } from "./roadRibbons";
 
 describe("road ribbon sample cache", () => {
   it("builds a shorter sample window for perf mode", () => {
@@ -36,12 +36,12 @@ describe("road ribbon sample cache", () => {
     expect(samples[1] - samples[0]).toBeCloseTo(railSettings.spacing);
   });
 
-  it("keeps dashed lane phase bounded to the dash cycle", () => {
-    const offset = laneDashOffsetForSampleBase(123.45);
-    expect(offset).toBeGreaterThanOrEqual(0);
-    expect(offset).toBeLessThan(8.2);
-    expect(laneDashOffsetForSampleBase(123.45 + 8.2)).toBeCloseTo(offset);
-    expect(laneDashOffsetForSampleBase(-1)).toBeGreaterThanOrEqual(0);
+  it("anchors explicit dash segments to a stable global phase", () => {
+    expect(firstLaneDashStart(0)).toBe(0);
+    expect(firstLaneDashStart(2)).toBe(0);
+    expect(firstLaneDashStart(4)).toBeCloseTo(8.2);
+    expect(firstLaneDashStart(123.45 + 8.2) - firstLaneDashStart(123.45)).toBeCloseTo(8.2);
+    expect(firstLaneDashStart(-1)).toBe(0);
   });
 
   it("uses identical lane-line segmentation in both modes while high extends farther", () => {

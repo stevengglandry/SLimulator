@@ -34,7 +34,15 @@ type GuardrailLine = {
   fadeStartM?: number;
   fadeEndM?: number;
   maxSampleCount: number;
-  dashed: boolean;
+};
+
+type LaneDashLine = {
+  mesh: Mesh<BufferGeometry, MeshBasicMaterial>;
+  positions: Float32Array;
+  colors: Float32Array;
+  nearColor: Color;
+  farColor: Color;
+  maxSegmentCount: number;
 };
 
 type LateralSource = number | ((s: number) => number);
@@ -48,6 +56,7 @@ const GUARDRAIL_SAMPLE_COUNT_MAX = GUARDRAIL_SAMPLE_COUNT_HIGH;
 const LANE_DASH_SIZE_M = 3.1;
 const LANE_DASH_GAP_M = 5.1;
 const LANE_DASH_CYCLE_M = LANE_DASH_SIZE_M + LANE_DASH_GAP_M;
+const MAX_LANE_DASH_SEGMENTS = Math.ceil((GUARDRAIL_SAMPLE_COUNT_HIGH * 1.45) / LANE_DASH_CYCLE_M) + 2;
 const LANE_DIVIDER_REVEAL_LANES = 0.68;
 export const OUTER_GROUND_MARGIN_M = 190;
 
@@ -90,8 +99,10 @@ export function fillGuardrailRibbonSamples(target: Float32Array, roadPositionM: 
   return { base, sampleCount: settings.sampleCount, spacing: settings.spacing };
 }
 
-export function laneDashOffsetForSampleBase(sampleBaseM: number): number {
-  return ((sampleBaseM % LANE_DASH_CYCLE_M) + LANE_DASH_CYCLE_M) % LANE_DASH_CYCLE_M;
+export function firstLaneDashStart(windowStartS: number): number {
+  let dashStart = Math.floor(windowStartS / LANE_DASH_CYCLE_M) * LANE_DASH_CYCLE_M;
+  if (dashStart + LANE_DASH_SIZE_M <= windowStartS) dashStart += LANE_DASH_CYCLE_M;
+  return dashStart;
 }
 
 export function laneDividerVisible(laneFloat: number, dividerThreshold: number): boolean {
@@ -102,7 +113,7 @@ export class RoadRibbonSystem {
   private readonly ribbons: Record<string, Ribbon>;
   private readonly guardrailLines: { left: GuardrailLine; right: GuardrailLine };
   private readonly markingLines: { edgeL: GuardrailLine; edgeR: GuardrailLine; centerL: GuardrailLine; centerR: GuardrailLine };
-  private readonly laneLines: GuardrailLine[] = [];
+  private readonly laneLines: LaneDashLine[] = [];
   private readonly roadSamples = new Float32Array(ROAD_SAMPLE_COUNT_MAX);
   private readonly guardrailSamples = new Float32Array(GUARDRAIL_SAMPLE_COUNT_MAX);
   private qualityMode: RenderQuality = "high";
@@ -167,7 +178,7 @@ export class RoadRibbonSystem {
     this.updateGuardrailLine(this.markingLines.centerR, guardrailSamples, guardrailSettings.sampleCount, 0.17, 0.082, snapshot.vehicle.roadPositionM);
 
     for (let i = 0; i < this.laneLines.length; i++) {
-      this.laneLines[i].line.visible = false;
+      this.laneLines[i].mesh.visible = false;
     }
     let ribbonIdx = 0;
     const farSampleS = guardrailSamples[Math.max(0, guardrailSettings.sampleCount - 1)] ?? snapshot.vehicle.roadPositionM;
@@ -183,17 +194,15 @@ export class RoadRibbonSystem {
       const offsetL = -config.laneWidth * (i + 1);
       if (ribbonIdx < this.laneLines.length) {
         const lineL = this.laneLines[ribbonIdx++];
-        lineL.line.visible = true;
-        lineL.line.material.opacity = 0.86 * dividerAlpha;
-        this.updateGuardrailLine(lineL, guardrailSamples, guardrailSettings.sampleCount, offsetL, 0.108, snapshot.vehicle.roadPositionM, (s) => laneDividerVisible(this.road.laneFloat(s), dividerThreshold));
+        lineL.mesh.material.opacity = 0.86 * dividerAlpha;
+        this.updateLaneDashLine(lineL, guardrailSamples, guardrailSettings.sampleCount, offsetL, 0.108, snapshot.vehicle.roadPositionM, (s) => laneDividerVisible(this.road.laneFloat(s), dividerThreshold));
       }
       // Right side lane divider
       const offsetR = config.laneWidth * (i + 1);
       if (ribbonIdx < this.laneLines.length) {
         const lineR = this.laneLines[ribbonIdx++];
-        lineR.line.visible = true;
-        lineR.line.material.opacity = 0.86 * dividerAlpha;
-        this.updateGuardrailLine(lineR, guardrailSamples, guardrailSettings.sampleCount, offsetR, 0.108, snapshot.vehicle.roadPositionM, (s) => laneDividerVisible(this.road.laneFloat(s), dividerThreshold));
+        lineR.mesh.material.opacity = 0.86 * dividerAlpha;
+        this.updateLaneDashLine(lineR, guardrailSamples, guardrailSettings.sampleCount, offsetR, 0.108, snapshot.vehicle.roadPositionM, (s) => laneDividerVisible(this.road.laneFloat(s), dividerThreshold));
       }
     }
   }
@@ -242,18 +251,14 @@ export class RoadRibbonSystem {
       alphaToCoverage: true,
       depthWrite: false
     });
-    const laneDivider = new LineMaterial({
+    const laneDivider = new MeshBasicMaterial({
       color: 0xffffff,
-      linewidth: 0.12,
-      worldUnits: true,
       vertexColors: true,
-      dashed: true,
-      dashSize: LANE_DASH_SIZE_M,
-      gapSize: LANE_DASH_GAP_M,
       transparent: true,
       opacity: 0.86,
-      alphaToCoverage: true,
-      depthWrite: false
+      depthWrite: false,
+      side: DoubleSide,
+      fog: true
     });
     const roadSheen = new MeshBasicMaterial({ color: 0x90a096, transparent: true, opacity: 0.13, depthWrite: false, side: DoubleSide });
     const shoulderGlow = new MeshBasicMaterial({ color: 0x98f5dd, transparent: true, opacity: 0.13, depthWrite: false, side: DoubleSide });
@@ -274,14 +279,7 @@ export class RoadRibbonSystem {
     for (let i = 0; i < 6; i++) {
       const material = laneDivider.clone();
       this.laneLines.push(
-        this.createGuardrailLine(GUARDRAIL_SAMPLE_COUNT_MAX, material, `lane${i}`, {
-          dashed: true,
-          renderOrder: 4,
-          nearColor: 0xe1f8f1,
-          farColor: 0x47645e,
-          fadeStartM: 70,
-          fadeEndM: 175
-        })
+        this.createLaneDashLine(material, `lane${i}`)
       );
     }
     return {
@@ -353,7 +351,6 @@ export class RoadRibbonSystem {
     material: LineMaterial,
     name: string,
     options: {
-      dashed?: boolean;
       renderOrder?: number;
       nearColor?: number;
       farColor?: number;
@@ -370,9 +367,6 @@ export class RoadRibbonSystem {
     line.name = name;
     line.frustumCulled = false;
     line.renderOrder = options.renderOrder ?? 2;
-    const dashed = options.dashed ?? false;
-    if (material.dashed !== dashed) material.dashed = dashed;
-    if (dashed) line.computeLineDistances();
     this.scene.add(line);
     return {
       line,
@@ -383,8 +377,42 @@ export class RoadRibbonSystem {
       farColor: options.farColor === undefined ? undefined : new Color(options.farColor),
       fadeStartM: options.fadeStartM,
       fadeEndM: options.fadeEndM,
-      maxSampleCount: sampleCount,
-      dashed: options.dashed ?? false
+      maxSampleCount: sampleCount
+    };
+  }
+
+  private createLaneDashLine(material: MeshBasicMaterial, name: string): LaneDashLine {
+    const geometry = new BufferGeometry();
+    const positions = new Float32Array(MAX_LANE_DASH_SEGMENTS * 4 * 3);
+    const colors = new Float32Array(MAX_LANE_DASH_SEGMENTS * 4 * 3);
+    const indices = new Uint16Array(MAX_LANE_DASH_SEGMENTS * 6);
+    for (let i = 0; i < MAX_LANE_DASH_SEGMENTS; i++) {
+      const vertex = i * 4;
+      const index = i * 6;
+      indices[index] = vertex;
+      indices[index + 1] = vertex + 2;
+      indices[index + 2] = vertex + 1;
+      indices[index + 3] = vertex + 1;
+      indices[index + 4] = vertex + 2;
+      indices[index + 5] = vertex + 3;
+    }
+    geometry.setAttribute("position", new BufferAttribute(positions, 3).setUsage(DynamicDrawUsage));
+    geometry.setAttribute("color", new BufferAttribute(colors, 3).setUsage(DynamicDrawUsage));
+    geometry.setIndex(new BufferAttribute(indices, 1));
+    geometry.setDrawRange(0, 0);
+    const mesh = new Mesh(geometry, material);
+    mesh.name = name;
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 4;
+    mesh.visible = false;
+    this.scene.add(mesh);
+    return {
+      mesh,
+      positions,
+      colors,
+      nearColor: new Color(0xe1f8f1),
+      farColor: new Color(0x47645e),
+      maxSegmentCount: MAX_LANE_DASH_SEGMENTS
     };
   }
 
@@ -495,10 +523,63 @@ export class RoadRibbonSystem {
     }
     line.geometry.setPositions(line.positions.subarray(0, count * 3));
     if (line.colors) line.geometry.setColors(line.colors.subarray(0, count * 3));
-    if (line.dashed) {
-      if (!line.line.material.dashed) line.line.material.dashed = true;
-      line.line.material.dashOffset = laneDashOffsetForSampleBase(samples[firstSample]);
-      line.line.computeLineDistances();
+  }
+
+  private updateLaneDashLine(
+    line: LaneDashLine,
+    samples: ArrayLike<number>,
+    activeSampleCount: number,
+    lateral: number,
+    y: number,
+    originS: number,
+    visibleAt: (s: number) => boolean
+  ): void {
+    if (activeSampleCount < 2) {
+      line.mesh.visible = false;
+      return;
     }
+    const windowStartS = samples[0];
+    const windowEndS = samples[activeSampleCount - 1];
+    let dashStart = firstLaneDashStart(windowStartS);
+    let segmentCount = 0;
+    while (dashStart < windowEndS && segmentCount < line.maxSegmentCount) {
+      const startS = Math.max(windowStartS, dashStart);
+      const endS = Math.min(windowEndS, dashStart + LANE_DASH_SIZE_M);
+      const midpointS = (startS + endS) * 0.5;
+      if (endS > startS && visibleAt(midpointS)) {
+        const halfWidth = 0.06;
+        const startLeft = this.road.worldFromRoad(startS, lateral - halfWidth, y);
+        const startRight = this.road.worldFromRoad(startS, lateral + halfWidth, y);
+        const endLeft = this.road.worldFromRoad(endS, lateral - halfWidth, y);
+        const endRight = this.road.worldFromRoad(endS, lateral + halfWidth, y);
+        const p = segmentCount * 12;
+        for (const [vertex, point] of [startLeft, startRight, endLeft, endRight].entries()) {
+          const offset = p + vertex * 3;
+          line.positions[offset] = point.x;
+          line.positions[offset + 1] = point.y;
+          line.positions[offset + 2] = point.z;
+        }
+        for (let endpoint = 0; endpoint < 2; endpoint++) {
+          const s = endpoint === 0 ? startS : endS;
+          const fade = smooth01((s - originS - 70) / 105);
+          for (let side = 0; side < 2; side++) {
+            const c = p + (endpoint * 2 + side) * 3;
+            line.colors[c] = line.nearColor.r + (line.farColor.r - line.nearColor.r) * fade;
+            line.colors[c + 1] = line.nearColor.g + (line.farColor.g - line.nearColor.g) * fade;
+            line.colors[c + 2] = line.nearColor.b + (line.farColor.b - line.nearColor.b) * fade;
+          }
+        }
+        segmentCount++;
+      }
+      dashStart += LANE_DASH_CYCLE_M;
+    }
+    if (segmentCount === 0) {
+      line.mesh.visible = false;
+      return;
+    }
+    line.mesh.geometry.setDrawRange(0, segmentCount * 6);
+    line.mesh.geometry.getAttribute("position").needsUpdate = true;
+    line.mesh.geometry.getAttribute("color").needsUpdate = true;
+    line.mesh.visible = true;
   }
 }
