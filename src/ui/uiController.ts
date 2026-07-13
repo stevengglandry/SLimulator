@@ -130,7 +130,7 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
           <div class="metric-grid">
             <div class="metric"><span class="label">Mode</span><span id="statusMode" class="value">manual</span></div>
             <div class="metric"><span class="label">Lanes</span><span id="statusLanes" class="value">1</span></div>
-            <div class="metric"><span class="label">Queue</span><span id="statusQueue" class="value">none</span></div>
+            <div class="metric"><span class="label">Transition</span><span id="statusTransition" class="value">idle</span></div>
             <div class="metric"><span class="label">Crashes</span><span id="statusCrashes" class="value">0</span></div>
           </div>
         </section>
@@ -170,6 +170,14 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
           <strong id="miniSceneReadout">UNMAPPED - 1 LANE</strong>
           <span id="miniModeReadout">MANUAL</span>
         </div>
+      </div>
+      <div class="keyboard-hints glass" aria-label="Keyboard controls: W accelerate, A and D steer, S brake, up arrow LCA, down arrow ACC">
+        <div class="key-drive" aria-hidden="true">
+          <kbd>W</kbd>
+          <span><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>
+        </div>
+        <div class="key-labels micro"><span>W accel</span><span>A/D steer</span><span>S brake</span></div>
+        <div class="key-adas micro"><span><kbd>&uarr;</kbd> LCA</span><span><kbd>&darr;</kbd> ACC</span></div>
       </div>
       <div class="pedals">
         <div class="pedal-wrap brake-wrap">
@@ -358,7 +366,7 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
         must("miniModeReadout").textContent = snapshot.adas.mode.toUpperCase();
         must("statusMode").textContent = snapshot.adas.mode;
         must("statusLanes").textContent = String(snapshot.road.lanesPerDirection);
-        must("statusQueue").textContent = snapshot.road.queue.map((item) => SCENES[item.target].label).join(" -> ") || "none";
+        must("statusTransition").textContent = snapshot.road.transition ? SCENES[snapshot.road.transition.to].label : "idle";
         must("statusCrashes").textContent = String(snapshot.metrics.crashCount);
         must<HTMLElement>("accelFill").style.height = `${Math.round(snapshot.vehicle.controls.accelerator * 100)}%`;
         must<HTMLElement>("brakeFill").style.height = `${Math.round(snapshot.vehicle.controls.brake * 100)}%`;

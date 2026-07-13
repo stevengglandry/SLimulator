@@ -1,57 +1,18 @@
 import {
   BufferAttribute,
   BufferGeometry,
-  CanvasTexture,
   Color,
   DoubleSide,
   DynamicDrawUsage,
   Mesh,
   MeshBasicMaterial,
   MeshLambertMaterial,
-  RepeatWrapping,
   Scene
 } from "three";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { config } from "../game/config";
-
-function createFacadeTexture(): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 256;
-  const ctx = canvas.getContext("2d")!;
-
-  const grad = ctx.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0, "#112430");
-  grad.addColorStop(1, "#18232c");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 128, 256);
-
-  const cols = 8;
-  const rows = 24;
-  const colW = 128 / cols;
-  const rowH = 256 / rows;
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const randVal = (Math.sin(r * 12.9898 + c * 78.233) * 43758.5453) % 1;
-      const noise = Math.abs(randVal);
-      if (noise > 0.65) {
-        ctx.fillStyle = noise > 0.88 ? "#ffc640" : "#5be5f7";
-      } else {
-        ctx.fillStyle = "#0c151c";
-      }
-      ctx.fillRect(c * colW + 3, r * rowH + 2, colW - 6, rowH - 4);
-    }
-  }
-
-  const texture = new CanvasTexture(canvas);
-  texture.wrapS = RepeatWrapping;
-  texture.wrapT = RepeatWrapping;
-  texture.repeat.set(1, 1);
-  return texture;
-}
 
 import { RoadModel } from "../game/route";
 import type { RenderQuality, SimSnapshot } from "../game/types";
@@ -87,6 +48,8 @@ const GUARDRAIL_SAMPLE_COUNT_MAX = GUARDRAIL_SAMPLE_COUNT_HIGH;
 const LANE_DASH_SIZE_M = 3.1;
 const LANE_DASH_GAP_M = 5.1;
 const LANE_DASH_CYCLE_M = LANE_DASH_SIZE_M + LANE_DASH_GAP_M;
+const LANE_DIVIDER_REVEAL_LANES = 0.68;
+export const OUTER_GROUND_MARGIN_M = 190;
 
 function smooth01(value: number): number {
   const t = Math.max(0, Math.min(1, value));
@@ -114,7 +77,7 @@ export function fillRoadRibbonSamples(target: Float32Array, roadPositionM: numbe
 
 export function guardrailRibbonSettings(mode: RenderQuality): { sampleCount: number; spacing: number; backDistance: number } {
   return mode === "high"
-    ? { sampleCount: GUARDRAIL_SAMPLE_COUNT_HIGH, spacing: 1.1, backDistance: 42 }
+    ? { sampleCount: GUARDRAIL_SAMPLE_COUNT_HIGH, spacing: 1.45, backDistance: 42 }
     : { sampleCount: GUARDRAIL_SAMPLE_COUNT_PERF, spacing: 1.45, backDistance: 30 };
 }
 
@@ -129,6 +92,10 @@ export function fillGuardrailRibbonSamples(target: Float32Array, roadPositionM: 
 
 export function laneDashOffsetForSampleBase(sampleBaseM: number): number {
   return ((sampleBaseM % LANE_DASH_CYCLE_M) + LANE_DASH_CYCLE_M) % LANE_DASH_CYCLE_M;
+}
+
+export function laneDividerVisible(laneFloat: number, dividerThreshold: number): boolean {
+  return laneFloat > dividerThreshold + LANE_DIVIDER_REVEAL_LANES;
 }
 
 export class RoadRibbonSystem {
@@ -160,20 +127,26 @@ export class RoadRibbonSystem {
     const base = Math.floor((snapshot.vehicle.roadPositionM - settings.backDistance) / settings.spacing) * settings.spacing;
     const guardrailBase = Math.floor((snapshot.vehicle.roadPositionM - guardrailSettings.backDistance) / guardrailSettings.spacing) * guardrailSettings.spacing;
     const transition = snapshot.road.transition;
-    const transitionKey = transition ? `${transition.from}:${transition.to}:${Math.floor(transition.progress * 1000)}` : "";
+    const transitionKey = transition ? `${transition.from}:${transition.to}:${transition.originS}` : "";
     const updateKey = `${this.qualityMode}:${base}:${guardrailBase}:${snapshot.road.scene}:${transitionKey}`;
     if (updateKey === this.lastUpdateKey) return;
     this.lastUpdateKey = updateKey;
 
     fillRoadRibbonSamples(this.roadSamples, snapshot.vehicle.roadPositionM, this.qualityMode);
-    const guardrailSampleWindow = fillGuardrailRibbonSamples(this.guardrailSamples, snapshot.vehicle.roadPositionM, this.qualityMode);
-    this.updateLaneDashPhase(guardrailSampleWindow.base);
+    fillGuardrailRibbonSamples(this.guardrailSamples, snapshot.vehicle.roadPositionM, this.qualityMode);
 
     const samples = this.roadSamples;
     const guardrailSamples = this.guardrailSamples;
     const boundsAt = (s: number) => this.road.boundsAt(s);
     const bounds = boundsAt(snapshot.vehicle.roadPositionM);
-    this.updateRibbon(this.ribbons.ground, samples, settings.sampleCount, (s) => boundsAt(s).leftWall - 60, (s) => boundsAt(s).rightWall + 60, -0.18);
+    this.updateRibbon(
+      this.ribbons.ground,
+      samples,
+      settings.sampleCount,
+      (s) => boundsAt(s).leftWall - OUTER_GROUND_MARGIN_M,
+      (s) => boundsAt(s).rightWall + OUTER_GROUND_MARGIN_M,
+      -0.18
+    );
     this.updateRibbon(this.ribbons.road, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge, (s) => boundsAt(s).rightEdge, 0.02);
     this.updateRibbon(this.ribbons.shoulderL, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge - config.shoulderWidth, (s) => boundsAt(s).leftEdge, 0.012);
     this.updateRibbon(this.ribbons.shoulderR, samples, settings.sampleCount, (s) => boundsAt(s).rightEdge, (s) => boundsAt(s).rightEdge + config.shoulderWidth, 0.012);
@@ -187,9 +160,6 @@ export class RoadRibbonSystem {
     this.updateVerticalRibbon(this.ribbons.guardrailFaceR, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).rightWall, 0.5, 0.82);
     this.updateGuardrailLine(this.guardrailLines.left, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).leftWall, 0.86, snapshot.vehicle.roadPositionM);
     this.updateGuardrailLine(this.guardrailLines.right, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).rightWall, 0.86, snapshot.vehicle.roadPositionM);
-
-    this.ribbons.urbanFacadeL.mesh.visible = false;
-    this.ribbons.urbanFacadeR.mesh.visible = false;
 
     this.updateGuardrailLine(this.markingLines.edgeL, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).leftEdge + 0.06, 0.076, snapshot.vehicle.roadPositionM);
     this.updateGuardrailLine(this.markingLines.edgeR, guardrailSamples, guardrailSettings.sampleCount, (s) => boundsAt(s).rightEdge - 0.06, 0.076, snapshot.vehicle.roadPositionM);
@@ -215,7 +185,7 @@ export class RoadRibbonSystem {
         const lineL = this.laneLines[ribbonIdx++];
         lineL.line.visible = true;
         lineL.line.material.opacity = 0.86 * dividerAlpha;
-        this.updateGuardrailLine(lineL, guardrailSamples, guardrailSettings.sampleCount, offsetL, 0.108, snapshot.vehicle.roadPositionM, (s) => this.road.laneFloat(s) > dividerThreshold + 0.03);
+        this.updateGuardrailLine(lineL, guardrailSamples, guardrailSettings.sampleCount, offsetL, 0.108, snapshot.vehicle.roadPositionM, (s) => laneDividerVisible(this.road.laneFloat(s), dividerThreshold));
       }
       // Right side lane divider
       const offsetR = config.laneWidth * (i + 1);
@@ -223,7 +193,7 @@ export class RoadRibbonSystem {
         const lineR = this.laneLines[ribbonIdx++];
         lineR.line.visible = true;
         lineR.line.material.opacity = 0.86 * dividerAlpha;
-        this.updateGuardrailLine(lineR, guardrailSamples, guardrailSettings.sampleCount, offsetR, 0.108, snapshot.vehicle.roadPositionM, (s) => this.road.laneFloat(s) > dividerThreshold + 0.03);
+        this.updateGuardrailLine(lineR, guardrailSamples, guardrailSettings.sampleCount, offsetR, 0.108, snapshot.vehicle.roadPositionM, (s) => laneDividerVisible(this.road.laneFloat(s), dividerThreshold));
       }
     }
   }
@@ -242,13 +212,6 @@ export class RoadRibbonSystem {
     const shoulderMaterial = new MeshLambertMaterial({ color: 0x33574f, side: DoubleSide });
     const grassMaterial = new MeshLambertMaterial({ color: 0x2d5f4f, side: DoubleSide });
     const wallMaterial = new MeshLambertMaterial({ color: 0x496d70, side: DoubleSide });
-    const facadeTex = createFacadeTexture();
-    const facadeMaterial = new MeshBasicMaterial({
-      map: facadeTex,
-      side: DoubleSide,
-      transparent: true,
-      opacity: 0.82
-    });
     const guardrailFace = new MeshBasicMaterial({ color: 0xaac5bd, side: DoubleSide, transparent: true, opacity: 0.68, depthWrite: false });
     const guardrailTop = new LineMaterial({
       color: 0xd4e8e0,
@@ -306,9 +269,7 @@ export class RoadRibbonSystem {
       wallL: this.createRibbon(sampleCount, wallMaterial, "wallL"),
       wallR: this.createRibbon(sampleCount, wallMaterial, "wallR"),
       guardrailFaceL: this.createRibbon(GUARDRAIL_SAMPLE_COUNT_MAX, guardrailFace, "guardrailFaceL"),
-      guardrailFaceR: this.createRibbon(GUARDRAIL_SAMPLE_COUNT_MAX, guardrailFace, "guardrailFaceR"),
-      urbanFacadeL: this.createRibbon(sampleCount, facadeMaterial, "urbanFacadeL"),
-      urbanFacadeR: this.createRibbon(sampleCount, facadeMaterial, "urbanFacadeR")
+      guardrailFaceR: this.createRibbon(GUARDRAIL_SAMPLE_COUNT_MAX, guardrailFace, "guardrailFaceR")
     };
     for (let i = 0; i < 6; i++) {
       const material = laneDivider.clone();
@@ -509,12 +470,15 @@ export class RoadRibbonSystem {
         lastSample = i;
       }
       if (firstSample < 0) {
-        line.geometry.setPositions(line.positions.subarray(0, 0));
-        if (line.colors) line.geometry.setColors(line.colors.subarray(0, 0));
+        line.line.visible = false;
         return;
       }
     }
     const count = Math.max(0, lastSample - firstSample + 1);
+    if (count < 2) {
+      line.line.visible = false;
+      return;
+    }
     for (let i = 0; i < count; i++) {
       const s = samples[firstSample + i];
       const point = this.road.worldFromRoad(s, resolveLateral(lateral, s), y);
@@ -533,14 +497,8 @@ export class RoadRibbonSystem {
     if (line.colors) line.geometry.setColors(line.colors.subarray(0, count * 3));
     if (line.dashed) {
       if (!line.line.material.dashed) line.line.material.dashed = true;
+      line.line.material.dashOffset = laneDashOffsetForSampleBase(samples[firstSample]);
       line.line.computeLineDistances();
-    }
-  }
-
-  private updateLaneDashPhase(sampleBaseM: number): void {
-    const dashOffset = laneDashOffsetForSampleBase(sampleBaseM);
-    for (const line of this.laneLines) {
-      if (line.dashed) line.line.material.dashOffset = dashOffset;
     }
   }
 }

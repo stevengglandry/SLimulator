@@ -146,9 +146,6 @@ export class Simulator {
     if (result === "started") {
       this.setDIC(`TRANSITION - ${SCENES[scene].label}`, 3);
       publish("event", { type: "scene-transition-start", from: this.road.scene, to: scene }, false);
-    } else if (result === "queued") {
-      this.setDIC(`QUEUED - ${SCENES[scene].label}`, 2.4);
-      publish("event", { type: "scene-transition-queued", to: scene, queue: [...this.road.queue] }, false);
     }
   }
 
@@ -178,22 +175,25 @@ export class Simulator {
       else this.setDIC("LANE CENTER OFF", 2.4);
       return;
     }
-    if (this.road.scene === "unmapped" && !this.road.transition) {
+
+    // An LCA request always sets longitudinal support first. This lets drivers
+    // use one action to establish ACC even while lane centering is only armed
+    // or temporarily unavailable.
+    this.adas.accActive = true;
+    this.adas.setSpeedMps = Math.max(pose.speedMps, 15 * MPS_PER_MPH);
+
+    if (this.road.scene === "unmapped") {
       this.adas.autoArmed = true;
-      this.adas.accActive = pose.speedMps >= 15 * MPS_PER_MPH;
-      this.adas.setSpeedMps = Math.max(pose.speedMps, 15 * MPS_PER_MPH);
-      this.setDIC("LCA ARMED", 2.4);
+      this.setDIC("LCA ARMED - ACC SET", 2.4);
       return;
     }
     if (this.road.scene === "l2" || this.road.scene === "l3") {
       this.adas.lcaActive = true;
-      this.adas.accActive = true;
       this.adas.autoArmed = false;
-      this.adas.setSpeedMps = Math.max(pose.speedMps, 15 * MPS_PER_MPH);
       this.setDIC(`${this.road.scene.toUpperCase()} ACTIVE`, 2.4);
       return;
     }
-    this.setDIC("LCA UNAVAILABLE", 2);
+    this.setDIC("LCA UNAVAILABLE - ACC SET", 2.4);
   }
 
   triggerAlert({ type = "earcon", expectedAction = "brake", id }: { type?: AlertType; expectedAction?: ExpectedAction; id?: string } = {}): string {
@@ -244,7 +244,6 @@ export class Simulator {
         requestedScene: this.road.requestedScene(),
         lanesPerDirection: this.road.laneCount(pose.s),
         transition: this.road.transition ? { ...this.road.transition } : null,
-        queue: this.road.queue.map((item) => ({ ...item })),
         seed: this.road.seed,
         bounds: this.road.boundsAt(pose.s),
         lane,
@@ -288,9 +287,6 @@ export class Simulator {
     const transition = this.road.update(dt, transitionPose.s);
     if (transition.completed) {
       this.finishSceneTransition(transition.completed.from, transition.completed.to);
-    }
-    if (transition.started) {
-      publish("event", { type: "scene-transition-start", from: this.road.scene, to: transition.started }, false);
     }
 
     let driver = this.inputSource === "external" ? { ...this.externalControls } : { ...localControls };

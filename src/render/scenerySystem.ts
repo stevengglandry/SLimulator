@@ -24,7 +24,7 @@ import { RoadModel } from "../game/route";
 import type { RenderQuality, SceneKey, SimSnapshot } from "../game/types";
 import { clamp, hash01, lerp, smoothstep, TAU } from "../shared/math";
 import { createClumpyFoliageGeometry } from "./geometry";
-import { roadsideSlotForScene, sceneBoundsFor, worldFromSceneRoad } from "./scenerySlots";
+import { roadsideSlotForScene, sceneBoundsFor, transitionSignRoadPosition, worldFromSceneRoad } from "./scenerySlots";
 import { createStreetlightConeMaterial } from "./vehicleLights";
 
 const tmpObject = new Object3D();
@@ -32,16 +32,6 @@ const tmpColor = new Color();
 const CROSSWALK_MAX_STRIPES = 240;
 const CROSSWALK_STRIPE_SEGMENTS = 4;
 const CROSSWALK_VERTS_PER_STRIPE = (CROSSWALK_STRIPE_SEGMENTS + 1) * 2;
-const BILLBOARD_PHRASES = [
-  "KEEP YOUR LANE",
-  "SMOOTH IS FAST",
-  "CHECK MIRRORS",
-  "DRIVE AHEAD",
-  "MIND THE GAP",
-  "CRUISE CLEAN",
-  "LOOK FAR",
-  "SIGNAL EARLY"
-];
 const SPEED_SIGN_LIMITS = [30, 50, 70] as const;
 
 function createBuildingTexture(): CanvasTexture {
@@ -103,36 +93,6 @@ function createDenseWindowTexture(seed = 0): CanvasTexture {
   texture.wrapS = RepeatWrapping;
   texture.wrapT = RepeatWrapping;
   return texture;
-}
-
-function createBillboardTexture(text: string, seed: number): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 256;
-  const ctx = canvas.getContext("2d")!;
-  const hue = Math.floor(170 + hash01(seed) * 180);
-  ctx.fillStyle = `hsl(${hue}, 44%, 34%)`;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "rgba(255,255,255,0.09)";
-  ctx.fillRect(0, 0, canvas.width, 42);
-  ctx.fillRect(0, canvas.height - 34, canvas.width, 34);
-  ctx.strokeStyle = "#c9d8d4";
-  ctx.lineWidth = 10;
-  ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
-  ctx.fillStyle = "#d9e8e3";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = "700 54px system-ui, sans-serif";
-  const words = text.split(" ");
-  if (words.length > 2) {
-    ctx.fillText(words.slice(0, 2).join(" "), canvas.width / 2, 102);
-    ctx.fillText(words.slice(2).join(" "), canvas.width / 2, 162);
-  } else {
-    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
-  }
-  ctx.font = "700 20px system-ui, sans-serif";
-  ctx.fillText("SLIMULATOR", canvas.width / 2, canvas.height - 28);
-  return new CanvasTexture(canvas);
 }
 
 function createSpeedLimitTexture(limit: number): CanvasTexture {
@@ -207,11 +167,7 @@ type LandmarkCounts = {
   shop: number;
   awning: number;
   bulk: number;
-  lot: number;
-  stripe: number;
   tower: number;
-  billboardPost: number;
-  billboardFace: number;
 };
 
 type SpeedSignCounts = {
@@ -263,14 +219,9 @@ export class ScenerySystem {
   private readonly shopBuildings: InstancedMesh;
   private readonly shopAwnings: InstancedMesh;
   private readonly bulkStores: InstancedMesh;
-  private readonly parkingLots: InstancedMesh;
-  private readonly parkingStripes: InstancedMesh;
   private readonly skyscrapers: InstancedMesh;
-  private readonly billboardPosts: InstancedMesh;
   private readonly speedSignPosts: InstancedMesh;
   private readonly transitionSignPosts: InstancedMesh;
-  private readonly billboardFaces: Array<Mesh<PlaneGeometry, MeshBasicMaterial>> = [];
-  private readonly billboardMaterials: MeshBasicMaterial[];
   private readonly speedSignFaces: Array<Mesh<PlaneGeometry, MeshBasicMaterial>> = [];
   private readonly speedSignMaterials: Map<number, MeshBasicMaterial>;
   private readonly transitionSignFaces: Array<Mesh<PlaneGeometry, MeshBasicMaterial>> = [];
@@ -315,25 +266,15 @@ export class ScenerySystem {
     this.shopBuildings = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xcbd7d2 }), 56, true);
     this.shopAwnings = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x4ea6b1 }), 56, true);
     this.bulkStores = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xb7c6c9 }), 42, true);
-    this.parkingLots = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x263034 }), 86, false);
-    this.parkingStripes = this.createInstanced(unitBox, new MeshBasicMaterial({ color: 0xd9e2df }), 220, false);
     this.skyscrapers = this.createInstanced(unitBox, new MeshLambertMaterial({ map: createDenseWindowTexture(this.road.seed), color: 0xffffff }), 54, true);
-    this.billboardPosts = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x223238 }), 120, true);
     this.speedSignPosts = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0xcbd5d2 }), 56, true);
     this.transitionSignPosts = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x6f8b88 }), 8, true);
-    this.billboardMaterials = BILLBOARD_PHRASES.map((phrase, index) => new MeshBasicMaterial({
-      map: createBillboardTexture(phrase, this.road.seed + index * 127.3),
-      color: 0xb5c2be,
-      side: DoubleSide,
-      fog: true
-    }));
     this.speedSignMaterials = new Map(SPEED_SIGN_LIMITS.map((limit) => [limit, new MeshBasicMaterial({
       map: createSpeedLimitTexture(limit),
       color: 0xb8c2bd,
       side: DoubleSide,
       fog: true
     })]));
-    this.createPlanePool(this.billboardFaces, 38, this.billboardMaterials[0], true);
     this.createPlanePool(this.speedSignFaces, 24, this.speedSignMaterials.get(30)!, true);
     this.createPlanePool(this.transitionSignFaces, 4, this.transitionSignMaterial("ENTERING\nHWY"), true);
   }
@@ -349,7 +290,7 @@ export class ScenerySystem {
       ? { backDistance: 50, forwardDistance: 420, timeHz: 8, density: 1 }
       : { backDistance: 36, forwardDistance: 260, timeHz: 4, density: 0.54 };
     const transition = snapshot.road.transition;
-    const transitionKey = transition ? `${transition.from}:${transition.to}:${Math.floor(transition.progress * 1000)}` : "";
+    const transitionKey = transition ? `${transition.from}:${transition.to}:${transition.originS}` : "";
     const startAnchor = Math.floor((snapshot.vehicle.roadPositionM - settings.backDistance) / 18);
     const endAnchor = Math.ceil((snapshot.vehicle.roadPositionM + settings.forwardDistance) / 18);
     const timeBucket = Math.floor(nowSeconds * settings.timeHz);
@@ -495,7 +436,6 @@ export class ScenerySystem {
       if (activeUrban && anchor % (activeUrbanScale > 1.1 ? 2 : 3) === 0) {
         for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
           if (urbanBlock >= this.capacity(this.urbanBlocks) || urbanCap >= this.capacity(this.urbanRoofCaps)) break;
-          if (this.reservesBillboardSlot(anchor, sideIndex)) continue;
           const side = sideIndex ? 1 : -1;
           const blockSeed = anchor * 23.9 + sideIndex * 71.1 + seedOffset;
           const lateralBase = (side < 0 ? bounds.leftWall : bounds.rightWall) + side * (safetyMargin + lerp(12, 36, hash01(blockSeed)));
@@ -541,7 +481,6 @@ export class ScenerySystem {
       }
 
       for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
-        if (this.reservesBillboardSlot(anchor, sideIndex)) continue;
         const side = sideIndex ? 1 : -1;
         const h = hash01(anchor * 11.17 + sideIndex * 43 + seedOffset);
         const objectS = s + (hash01(anchor * 5.13 + sideIndex) - 0.5) * 12;
@@ -688,20 +627,16 @@ export class ScenerySystem {
       [this.shopBuildings, landmarkCounts.shop],
       [this.shopAwnings, landmarkCounts.awning],
       [this.bulkStores, landmarkCounts.bulk],
-      [this.parkingLots, landmarkCounts.lot],
-      [this.parkingStripes, landmarkCounts.stripe],
       [this.skyscrapers, landmarkCounts.tower],
-      [this.billboardPosts, landmarkCounts.billboardPost],
       [this.speedSignPosts, speedSignCounts.post],
       [this.transitionSignPosts, transitionSignCounts.post]
     ]);
-    this.hidePlanePool(this.billboardFaces, landmarkCounts.billboardFace);
     this.hidePlanePool(this.speedSignFaces, speedSignCounts.face);
     this.hidePlanePool(this.transitionSignFaces, transitionSignCounts.face);
   }
 
   private writeLandmarks(startAnchor: number, endAnchor: number): LandmarkCounts {
-    const counts: LandmarkCounts = { shop: 0, awning: 0, bulk: 0, lot: 0, stripe: 0, tower: 0, billboardPost: 0, billboardFace: 0 };
+    const counts: LandmarkCounts = { shop: 0, awning: 0, bulk: 0, tower: 0 };
     const spacing = this.qualityMode === "high" ? 4 : 6;
 
     for (let anchor = startAnchor; anchor <= endAnchor; anchor++) {
@@ -715,12 +650,11 @@ export class ScenerySystem {
           if (preview.variant === "standard") continue;
           if (this.qualityMode === "perf" && hash01(layerSeed + anchor * 13.1 + sideIndex * 71.7) > 0.66) continue;
 
-          const radius = preview.variant === "bulk" ? 20 : preview.variant === "skyscraper" ? 14 : preview.variant === "billboard" ? 11 : 8;
+          const radius = preview.variant === "bulk" ? 20 : preview.variant === "skyscraper" ? 14 : 8;
           const slot = roadsideSlotForScene(scene, anchor, sideIndex, layerSeed, radius);
           const s = anchor * 18 + slot.sOffset;
           const point = worldFromSceneRoad(scene, s, slot.lateral, 0, this.road.seed);
           const rot = Math.PI + point.heading + slot.rotationJitter;
-          const faceRot = point.heading + slot.rotationJitter * 0.3;
           const shapeSeed = layerSeed + anchor * 29.7 + sideIndex * 97.3;
           const scale = clamp(baseScale * lerp(0.88, 1.08, hash01(shapeSeed + 1)), 0, 1);
           if (scale < 0.035) continue;
@@ -739,7 +673,6 @@ export class ScenerySystem {
             setInstance(this.shopAwnings, counts.awning, awningPoint.x, awningPoint.y, awningPoint.z, width * 0.82, 0.34 * scale, 1.1 * scale, rot);
             this.shopAwnings.setColorAt(counts.awning, tmpColor.setHSL(0.02 + hash01(shapeSeed + 19) * 0.56, 0.54, 0.48));
             counts.awning++;
-            this.writeParkingLot(counts, scene, s, slot.side, slot.clearance, rot, 11.5, 14.5, scale, shapeSeed);
             continue;
           }
 
@@ -752,7 +685,6 @@ export class ScenerySystem {
             setInstance(this.bulkStores, counts.bulk, p.x, p.y, p.z, width, height, depth, rot);
             this.bulkStores.setColorAt(counts.bulk, tmpColor.setHSL(0.52 + hash01(shapeSeed + 37) * 0.08, 0.16, 0.56 + hash01(shapeSeed + 41) * 0.12));
             counts.bulk++;
-            this.writeParkingLot(counts, scene, s, slot.side, slot.clearance, rot, 24, 32, scale, shapeSeed + 47);
             continue;
           }
 
@@ -768,63 +700,9 @@ export class ScenerySystem {
             continue;
           }
 
-          if (slot.variant === "billboard") {
-            if (
-              counts.billboardPost + 1 >= this.capacity(this.billboardPosts) ||
-              counts.billboardFace >= this.planeCapacity(this.billboardFaces)
-            ) {
-              continue;
-            }
-            const signWidth = lerp(13, 18, hash01(shapeSeed + 71)) * lerp(0.72, 1, scale);
-            const signHeight = lerp(5.8, 8.5, hash01(shapeSeed + 73)) * scale;
-            const postHeight = 4.6 + signHeight * 0.54;
-            for (const lateralOffset of [-signWidth * 0.42, signWidth * 0.42]) {
-              const post = worldFromSceneRoad(scene, s, slot.lateral + lateralOffset, postHeight * 0.5, this.road.seed);
-              setInstance(this.billboardPosts, counts.billboardPost++, post.x, post.y, post.z, 0.26, postHeight, 0.26, rot);
-            }
-            const facePoint = worldFromSceneRoad(scene, s, slot.lateral, postHeight + signHeight * 0.12, this.road.seed);
-            const materialIndex = Math.floor(hash01(shapeSeed + 79) * this.billboardMaterials.length) % this.billboardMaterials.length;
-            this.setPlane(this.billboardFaces, counts.billboardFace++, facePoint.x, facePoint.y, facePoint.z, signWidth, signHeight, faceRot, this.billboardMaterials[materialIndex]);
-          }
         }
       }
     return counts;
-  }
-
-  private reservesBillboardSlot(anchor: number, sideIndex: number): boolean {
-    const spacing = this.qualityMode === "high" ? 4 : 6;
-    const scene = this.road.scenerySceneAt(anchor * 18);
-    const seedShift = sceneSeedShift(scene);
-    if (positiveModulo(anchor + Math.floor(seedShift / 997), spacing) !== 0) return false;
-    const layerSeed = this.road.seed + seedShift;
-    return roadsideSlotForScene(scene, anchor, sideIndex, layerSeed, 11).variant === "billboard";
-  }
-
-  private writeParkingLot(
-    counts: LandmarkCounts,
-    scene: SceneKey,
-    s: number,
-    side: -1 | 1,
-    clearance: number,
-    rot: number,
-    lateralDepth: number,
-    roadLength: number,
-    scale: number,
-    seed: number
-  ): void {
-    if (counts.lot >= this.capacity(this.parkingLots)) return;
-    const lotLateral = clearance + side * (2.8 + lateralDepth * 0.5);
-    const lotS = s + (hash01(seed + 3) - 0.5) * 2.5;
-    const p = worldFromSceneRoad(scene, lotS, lotLateral, 0.055, this.road.seed);
-    setInstance(this.parkingLots, counts.lot++, p.x, p.y, p.z, lateralDepth * lerp(0.7, 1, scale), 0.08, roadLength * lerp(0.72, 1, scale), rot);
-    if (scale < 0.34) return;
-    const stripeCount = this.qualityMode === "high" ? 5 : 3;
-    for (let i = 0; i < stripeCount && counts.stripe < this.capacity(this.parkingStripes); i++) {
-      const t = i / (stripeCount - 1);
-      const stripeS = lotS + lerp(-roadLength * 0.34, roadLength * 0.34, t);
-      const stripe = worldFromSceneRoad(scene, stripeS, lotLateral, 0.12, this.road.seed);
-      setInstance(this.parkingStripes, counts.stripe++, stripe.x, stripe.y, stripe.z, lateralDepth * 0.58, 0.035, 0.11, rot);
-    }
   }
 
   private writeSpeedSigns(snapshot: SimSnapshot, startAnchor: number, endAnchor: number): SpeedSignCounts {
@@ -866,7 +744,7 @@ export class ScenerySystem {
     const transition = snapshot.road.transition;
     if (!transition) return counts;
 
-    const markerS = transition.originS + Math.min(82, Math.max(58, (transition.taperStartS - transition.originS) * 0.28));
+    const markerS = transitionSignRoadPosition(transition);
     const markerAnchor = Math.floor(markerS / 18);
     if (markerAnchor < startAnchor || markerAnchor > endAnchor) return counts;
     if (counts.face >= this.planeCapacity(this.transitionSignFaces) || counts.post + 2 > this.capacity(this.transitionSignPosts)) return counts;

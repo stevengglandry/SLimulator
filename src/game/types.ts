@@ -182,7 +182,6 @@ export interface SimSnapshot {
     requestedScene: SceneKey;
     lanesPerDirection: number;
     transition: RoadTransition | null;
-    queue: Array<{ target: SceneKey }>;
     seed: number;
     bounds: RoadBounds;
     lane: LaneInfo;

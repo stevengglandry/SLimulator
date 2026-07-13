@@ -1,8 +1,8 @@
 import { config, SCENES } from "../game/config";
-import type { RoadBounds, RoadFrame, SceneKey } from "../game/types";
+import type { RoadBounds, RoadFrame, RoadTransition, SceneKey } from "../game/types";
 import { hash01, lerp, TAU } from "../shared/math";
 
-export type RoadsideVariant = "standard" | "shop" | "bulk" | "skyscraper" | "billboard";
+export type RoadsideVariant = "standard" | "shop" | "bulk" | "skyscraper";
 
 export type RoadsideSlot = {
   side: -1 | 1;
@@ -12,6 +12,10 @@ export type RoadsideSlot = {
   rotationJitter: number;
   variant: RoadsideVariant;
 };
+
+export function transitionSignRoadPosition(transition: RoadTransition): number {
+  return lerp(transition.originS, transition.taperStartS, 0.72);
+}
 
 export function sceneBoundsFor(scene: SceneKey): RoadBounds {
   const sceneConfig = SCENES[scene];
@@ -71,14 +75,14 @@ export function worldFromSceneRoad(scene: SceneKey, s: number, lateral: number, 
 export function roadsideVariantFor(scene: SceneKey, anchor: number, sideIndex: number, seed: number): RoadsideVariant {
   const roll = hash01(seed + anchor * 41.7 + sideIndex * 131.9);
   if (scene === "l3") {
-    if (roll > 0.74) return "billboard";
+    if (roll > 0.74) return "standard";
     if (roll > 0.55) return "skyscraper";
     if (roll > 0.42) return "bulk";
     if (roll > 0.28) return "shop";
     return "standard";
   }
   if (scene === "l2") {
-    if (roll > 0.92) return "billboard";
+    if (roll > 0.92) return "standard";
     if (roll > 0.72) return "bulk";
     if (roll > 0.42) return "shop";
     return "standard";
@@ -92,6 +96,7 @@ export function roadsideSlotForScene(scene: SceneKey, anchor: number, sideIndex:
   const clearance = side < 0 ? bounds.leftWall : bounds.rightWall;
   const slotSeed = seed + anchor * 17.31 + sideIndex * 73.7;
   const sceneSetback = SCENES[scene].buildingSetback;
+  const variant = roadsideVariantFor(scene, anchor, sideIndex, seed);
   const minSetback = Math.max(3.5, sceneSetback * 0.38) + objectRadiusM + 2;
   const spread = scene === "l3" ? lerp(24, 86, hash01(slotSeed + 3)) : lerp(8, 34, hash01(slotSeed + 3));
   return {
@@ -100,6 +105,6 @@ export function roadsideSlotForScene(scene: SceneKey, anchor: number, sideIndex:
     lateral: clearance + side * (minSetback + spread),
     sOffset: (hash01(slotSeed + 7) - 0.5) * 12,
     rotationJitter: (hash01(slotSeed + 11) - 0.5) * 0.32,
-    variant: roadsideVariantFor(scene, anchor, sideIndex, seed)
+    variant
   };
 }

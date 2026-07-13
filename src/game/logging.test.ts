@@ -26,7 +26,6 @@ describe("createLogText", () => {
         requestedScene: "unmapped",
         lanesPerDirection: 1,
         transition: null,
-        queue: [],
         seed: 1,
         bounds: { laneCount: 1, laneFloat: 1, leftEdge: -1, rightEdge: 1, leftWall: -4, rightWall: 4, roadWidth: 2, medianWidth: 0, laneCenters: [0] },
         lane: { index: 0, center: 0, error: 0 }

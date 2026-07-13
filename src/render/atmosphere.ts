@@ -22,10 +22,6 @@ import { RoadModel } from "../game/route";
 import type { RenderQuality, SimSnapshot } from "../game/types";
 import { hash01, lerp } from "../shared/math";
 
-type BloomControl = {
-  strength: number;
-};
-
 type CloudBase = {
   x: number;
   y: number;
@@ -53,7 +49,6 @@ export class AtmosphereSystem {
   private readonly cloudPosition = new Vector3();
   private readonly cloudRotation = new Quaternion();
   private readonly up = new Vector3(0, 1, 0);
-  private bloom: BloomControl | null = null;
   private qualityMode: RenderQuality = "high";
 
   constructor(
@@ -84,7 +79,7 @@ export class AtmosphereSystem {
       roughness: 1,
       metalness: 0,
       flatShading: true,
-      fog: false
+      fog: true
     });
 
     for (let i = 0; i < 18; i++) {
@@ -135,9 +130,9 @@ export class AtmosphereSystem {
       }
       const base: CloudBase = {
         x: -430 + hash01(i * 31) * 860,
-        y: 82 + hash01(i * 37) * 122,
+        y: 135 + hash01(i * 37) * 100,
         z: -150 - hash01(i * 41) * 640,
-        speed: 2.4 + hash01(i * 43) * 5.8,
+        speed: 0.35 + hash01(i * 43) * 0.85,
         phase: hash01(i * 89) * Math.PI * 2,
         rotationY: (hash01(i * 67) - 0.5) * 0.35,
         scale: new Vector3(
@@ -158,10 +153,6 @@ export class AtmosphereSystem {
 
   setQualityMode(mode: RenderQuality): void {
     this.qualityMode = mode;
-  }
-
-  setBloomControl(bloom: BloomControl): void {
-    this.bloom = bloom;
   }
 
   update(snapshot: SimSnapshot, nowSeconds = 0): void {
@@ -189,7 +180,6 @@ export class AtmosphereSystem {
 
     this.sky.material.color.copy(fogColor);
     this.renderer.toneMappingExposure = lerp(1.2, 1.06, forest) + urban * 0.05;
-    if (this.bloom) this.bloom.strength = highQuality ? lerp(0.06, 0.11, urban) : 0;
 
     // Move the instanced cloud field with the camera. One instanced draw replaces
     // hundreds of individual puff meshes while preserving the same silhouettes.
@@ -198,9 +188,9 @@ export class AtmosphereSystem {
     for (let index = 0; index < this.cloudBases.length; index++) {
       if (!highQuality && index % 3 !== 0) continue;
       const base = this.cloudBases[index];
-      const travel = pose.s * 0.08 + nowSeconds * base.speed;
-      const z = wrapRange(base.z + travel, -820, 180);
-      const x = base.x + Math.sin(nowSeconds * 0.015 + base.phase) * 18;
+      const travel = pose.s * 0.018 + nowSeconds * base.speed;
+      const z = wrapRange(base.z + travel, -680, -180);
+      const x = base.x + Math.sin(nowSeconds * 0.006 + base.phase) * 8;
       this.cloudPosition.set(pose.x + x, base.y, pose.z + z);
       this.cloudRotation.setFromAxisAngle(this.up, base.rotationY);
       this.cloudWorldMatrix.compose(this.cloudPosition, this.cloudRotation, base.scale);

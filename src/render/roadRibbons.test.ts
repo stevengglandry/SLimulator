@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RoadModel } from "../game/route";
-import { fillGuardrailRibbonSamples, fillRoadRibbonSamples, guardrailRibbonSettings, laneDashOffsetForSampleBase, roadRibbonSettings } from "./roadRibbons";
+import { fillGuardrailRibbonSamples, fillRoadRibbonSamples, guardrailRibbonSettings, laneDashOffsetForSampleBase, laneDividerVisible, roadRibbonSettings } from "./roadRibbons";
 
 describe("road ribbon sample cache", () => {
   it("builds a shorter sample window for perf mode", () => {
@@ -43,4 +43,21 @@ describe("road ribbon sample cache", () => {
     expect(laneDashOffsetForSampleBase(123.45 + 8.2)).toBeCloseTo(offset);
     expect(laneDashOffsetForSampleBase(-1)).toBeGreaterThanOrEqual(0);
   });
+
+  it("uses identical lane-line segmentation in both modes while high extends farther", () => {
+    const high = guardrailRibbonSettings("high");
+    const perf = guardrailRibbonSettings("perf");
+    expect(high.spacing).toBe(perf.spacing);
+    expect(high.sampleCount * high.spacing - high.backDistance).toBeGreaterThan(
+      perf.sampleCount * perf.spacing - perf.backDistance
+    );
+  });
+
+  it("waits for usable lane width before revealing a new divider", () => {
+    expect(laneDividerVisible(1.5, 1)).toBe(false);
+    expect(laneDividerVisible(1.68, 1)).toBe(false);
+    expect(laneDividerVisible(1.7, 1)).toBe(true);
+    expect(laneDividerVisible(2.7, 2)).toBe(true);
+  });
+
 });

@@ -5,7 +5,6 @@ import { clamp, hash01, lerp, normalizeAngle, smoothstep, TAU } from "../shared/
 export class RoadModel {
   scene: SceneKey = "unmapped";
   transition: RoadTransition | null = null;
-  queue: Array<{ target: SceneKey }> = [];
 
   constructor(public seed: number) {}
 
@@ -13,20 +12,12 @@ export class RoadModel {
     this.seed = seed >>> 0;
     this.scene = scene;
     this.transition = null;
-    this.queue = [];
   }
 
-  requestScene(target: SceneKey, _transitionMs?: number, currentS = 0): "queued" | "started" | "noop" {
+  requestScene(target: SceneKey, _transitionMs?: number, currentS = 0): "started" | "ignored" | "noop" {
     if (!SCENES[target]) throw new Error(`Unknown scene: ${target}`);
-    if (!this.transition && target === this.scene) return "noop";
-    const last = this.queue[this.queue.length - 1];
-    if ((this.transition && this.transition.to === target && this.queue.length === 0) || last?.target === target) {
-      return "noop";
-    }
-    if (this.transition) {
-      this.queue.push({ target });
-      return "queued";
-    }
+    if (this.transition) return "ignored";
+    if (target === this.scene) return "noop";
     this.beginTransition(target, currentS);
     return "started";
   }
@@ -44,7 +35,7 @@ export class RoadModel {
     };
   }
 
-  update(_dt: number, currentS = 0): { completed?: { from: SceneKey; to: SceneKey }; started?: SceneKey } {
+  update(_dt: number, currentS = 0): { completed?: { from: SceneKey; to: SceneKey } } {
     if (!this.transition) return {};
     this.transition.progress = clamp((currentS - this.transition.originS) / Math.max(1, this.transition.lockS - this.transition.originS), 0, 1);
     if (currentS < this.transition.lockS) return {};
@@ -52,11 +43,6 @@ export class RoadModel {
     const to = this.transition.to;
     this.scene = to;
     this.transition = null;
-    if (this.queue.length) {
-      const next = this.queue.shift()!;
-      this.beginTransition(next.target, currentS);
-      return { completed: { from, to }, started: next.target };
-    }
     return { completed: { from, to } };
   }
 

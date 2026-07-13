@@ -30,6 +30,17 @@ describe("RoadModel", () => {
     expect(bounds.rightWall).toBeGreaterThan(bounds.rightEdge);
   });
 
+  it("ignores scene requests while a transition is active", () => {
+    const road = new RoadModel(9);
+    expect(road.requestScene("l2", undefined, 50)).toBe("started");
+    expect(road.requestScene("l3", undefined, 60)).toBe("ignored");
+    expect(road.transition?.to).toBe("l2");
+
+    road.update(1, 50 + config.sceneTransitionLeadM + config.sceneTransitionTaperM + 1);
+    expect(road.scene).toBe("l2");
+    expect(road.transition).toBeNull();
+  });
+
   it("round-trips world and road coordinates near the route", () => {
     const road = new RoadModel(77);
     const world = road.worldFromRoad(120, 2.2, 0);
