@@ -16,6 +16,7 @@ import { config } from "../game/config";
 
 import { RoadModel } from "../game/route";
 import type { RenderQuality, SimSnapshot } from "../game/types";
+import { getTerrainTexture } from "./terrainTexture";
 
 type Ribbon = {
   mesh: Mesh<BufferGeometry, MeshLambertMaterial | MeshBasicMaterial>;
@@ -111,6 +112,7 @@ export function laneDividerVisible(laneFloat: number, dividerThreshold: number):
 
 export class RoadRibbonSystem {
   private readonly ribbons: Record<string, Ribbon>;
+  private readonly grassMaterials: { high: MeshLambertMaterial; perf: MeshLambertMaterial };
   private readonly guardrailLines: { left: GuardrailLine; right: GuardrailLine };
   private readonly markingLines: { edgeL: GuardrailLine; edgeR: GuardrailLine; centerL: GuardrailLine; centerR: GuardrailLine };
   private readonly laneLines: LaneDashLine[] = [];
@@ -122,6 +124,7 @@ export class RoadRibbonSystem {
   constructor(private readonly scene: Scene, private readonly road: RoadModel) {
     const objects = this.createRoadRibbons();
     this.ribbons = objects.ribbons;
+    this.grassMaterials = objects.grassMaterials;
     this.guardrailLines = objects.guardrailLines;
     this.markingLines = objects.markingLines;
   }
@@ -129,6 +132,10 @@ export class RoadRibbonSystem {
   setQualityMode(mode: RenderQuality): void {
     if (this.qualityMode === mode) return;
     this.qualityMode = mode;
+    const grassMaterial = mode === "perf" ? this.grassMaterials.perf : this.grassMaterials.high;
+    this.ribbons.ground.mesh.material = grassMaterial;
+    this.ribbons.vergeL.mesh.material = grassMaterial;
+    this.ribbons.vergeR.mesh.material = grassMaterial;
     this.ribbons.vergeL.mesh.visible = mode === "high";
     this.ribbons.vergeR.mesh.visible = mode === "high";
     this.lastUpdateKey = "";
@@ -158,13 +165,14 @@ export class RoadRibbonSystem {
       settings.sampleCount,
       (s) => boundsAt(s).leftWall - OUTER_GROUND_MARGIN_M,
       (s) => boundsAt(s).rightWall + OUTER_GROUND_MARGIN_M,
-      -0.18
+      -0.18,
+      18
     );
     this.updateRibbon(this.ribbons.road, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge, (s) => boundsAt(s).rightEdge, 0.02);
     this.updateRibbon(this.ribbons.shoulderL, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge - config.shoulderWidth, (s) => boundsAt(s).leftEdge, 0.012);
     this.updateRibbon(this.ribbons.shoulderR, samples, settings.sampleCount, (s) => boundsAt(s).rightEdge, (s) => boundsAt(s).rightEdge + config.shoulderWidth, 0.012);
-    this.updateRibbon(this.ribbons.vergeL, samples, settings.sampleCount, (s) => boundsAt(s).leftWall + 0.18, (s) => boundsAt(s).leftEdge - config.shoulderWidth, 0);
-    this.updateRibbon(this.ribbons.vergeR, samples, settings.sampleCount, (s) => boundsAt(s).rightEdge + config.shoulderWidth, (s) => boundsAt(s).rightWall - 0.18, 0);
+    this.updateRibbon(this.ribbons.vergeL, samples, settings.sampleCount, (s) => boundsAt(s).leftWall + 0.18, (s) => boundsAt(s).leftEdge - config.shoulderWidth, 0, 18);
+    this.updateRibbon(this.ribbons.vergeR, samples, settings.sampleCount, (s) => boundsAt(s).rightEdge + config.shoulderWidth, (s) => boundsAt(s).rightWall - 0.18, 0, 18);
 
     this.updateRibbon(this.ribbons.roadSheen, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge + 0.08, (s) => boundsAt(s).rightEdge - 0.08, 0.043);
     this.updateRibbon(this.ribbons.shoulderGlowL, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge - 0.24, (s) => boundsAt(s).leftEdge + 0.08, 0.062);
@@ -213,6 +221,7 @@ export class RoadRibbonSystem {
 
   private createRoadRibbons(): {
     ribbons: Record<string, Ribbon>;
+    grassMaterials: { high: MeshLambertMaterial; perf: MeshLambertMaterial };
     guardrailLines: { left: GuardrailLine; right: GuardrailLine };
     markingLines: { edgeL: GuardrailLine; edgeR: GuardrailLine; centerL: GuardrailLine; centerR: GuardrailLine };
   } {
@@ -223,7 +232,14 @@ export class RoadRibbonSystem {
       side: DoubleSide
     });
     const shoulderMaterial = new MeshLambertMaterial({ color: 0x33574f, side: DoubleSide });
-    const grassMaterial = new MeshLambertMaterial({ color: 0x2d5f4f, side: DoubleSide });
+    const highGrassMaterial = new MeshLambertMaterial({ color: 0x2d5f4f, side: DoubleSide });
+    const perfGrassMaterial = new MeshLambertMaterial({
+      color: 0x66806d,
+      map: getTerrainTexture(),
+      emissive: 0x273b2f,
+      emissiveIntensity: 0.5,
+      side: DoubleSide
+    });
     const wallMaterial = new MeshLambertMaterial({ color: 0x496d70, side: DoubleSide });
     const guardrailFace = new MeshBasicMaterial({ color: 0xaac5bd, side: DoubleSide, transparent: true, opacity: 0.68, depthWrite: false });
     const guardrailTop = new LineMaterial({
@@ -268,12 +284,12 @@ export class RoadRibbonSystem {
     const shoulderGlow = new MeshBasicMaterial({ color: 0x98f5dd, transparent: true, opacity: 0.13, depthWrite: false, side: DoubleSide });
     const sampleCount = ROAD_SAMPLE_COUNT_MAX;
     const ribbons = {
-      ground: this.createRibbon(sampleCount, grassMaterial, "ground"),
+      ground: this.createRibbon(sampleCount, highGrassMaterial, "ground"),
       road: this.createRibbon(sampleCount, roadMaterial, "road"),
       shoulderL: this.createRibbon(sampleCount, shoulderMaterial, "shoulderL"),
       shoulderR: this.createRibbon(sampleCount, shoulderMaterial, "shoulderR"),
-      vergeL: this.createRibbon(sampleCount, grassMaterial, "vergeL"),
-      vergeR: this.createRibbon(sampleCount, grassMaterial, "vergeR"),
+      vergeL: this.createRibbon(sampleCount, highGrassMaterial, "vergeL"),
+      vergeR: this.createRibbon(sampleCount, highGrassMaterial, "vergeR"),
       roadSheen: this.createRibbon(sampleCount, roadSheen, "roadSheen"),
       shoulderGlowL: this.createRibbon(sampleCount, shoulderGlow, "shoulderGlowL"),
       shoulderGlowR: this.createRibbon(sampleCount, shoulderGlow, "shoulderGlowR"),
@@ -290,6 +306,7 @@ export class RoadRibbonSystem {
     }
     return {
       ribbons,
+      grassMaterials: { high: highGrassMaterial, perf: perfGrassMaterial },
       guardrailLines: {
         left: this.createGuardrailLine(GUARDRAIL_SAMPLE_COUNT_MAX, guardrailTop, "guardrailTopL", { renderOrder: 2 }),
         right: this.createGuardrailLine(GUARDRAIL_SAMPLE_COUNT_MAX, guardrailTop, "guardrailTopR", { renderOrder: 2 })
@@ -429,7 +446,7 @@ export class RoadRibbonSystem {
     left: LateralSource,
     right: LateralSource,
     y: number,
-    vScale?: number
+    worldUvMeters?: number
   ): void {
     for (let i = 0; i < activeSampleCount; i++) {
       const s = samples[i];
@@ -442,12 +459,19 @@ export class RoadRibbonSystem {
       ribbon.positions[p + 3] = r.x;
       ribbon.positions[p + 4] = r.y;
       ribbon.positions[p + 5] = r.z;
-      const v = vScale ? s / vScale : i / (activeSampleCount - 1);
       const uv = i * 4;
-      ribbon.uvs[uv] = 0;
-      ribbon.uvs[uv + 1] = v;
-      ribbon.uvs[uv + 2] = 1;
-      ribbon.uvs[uv + 3] = v;
+      if (worldUvMeters) {
+        ribbon.uvs[uv] = l.x / worldUvMeters;
+        ribbon.uvs[uv + 1] = l.z / worldUvMeters;
+        ribbon.uvs[uv + 2] = r.x / worldUvMeters;
+        ribbon.uvs[uv + 3] = r.z / worldUvMeters;
+      } else {
+        const v = i / (activeSampleCount - 1);
+        ribbon.uvs[uv] = 0;
+        ribbon.uvs[uv + 1] = v;
+        ribbon.uvs[uv + 2] = 1;
+        ribbon.uvs[uv + 3] = v;
+      }
     }
     const position = ribbon.mesh.geometry.getAttribute("position");
     const uv = ribbon.mesh.geometry.getAttribute("uv");

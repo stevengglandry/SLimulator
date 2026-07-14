@@ -1,7 +1,6 @@
 import {
   BufferAttribute,
   BufferGeometry,
-  CanvasTexture,
   Color,
   DodecahedronGeometry,
   DoubleSide,
@@ -12,13 +11,12 @@ import {
   MeshLambertMaterial,
   MeshStandardMaterial,
   Object3D,
-  RepeatWrapping,
-  Scene,
-  SRGBColorSpace
+  Scene
 } from "three";
 import { RoadModel } from "../game/route";
 import type { RenderQuality, SimSnapshot } from "../game/types";
 import { hash01, lerp, smoothstep } from "../shared/math";
+import { getTerrainTexture } from "./terrainTexture";
 
 const TILE_LENGTH_M = 36;
 const TILE_ROWS = 7;
@@ -114,34 +112,6 @@ export function terrainHeightAt(seed: number, worldX: number, worldZ: number, di
   return -0.015 + roadClearance * reliefM * Math.max(0.08, rolling);
 }
 
-function createTerrainTexture(): CanvasTexture {
-  const size = 64;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Unable to create terrain texture");
-  const image = context.createImageData(size, size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const index = (y * size + x) * 4;
-      const grain = hash01(x * 91.7 + y * 41.3) * 26;
-      const value = 198 + grain;
-      image.data[index] = value;
-      image.data[index + 1] = value;
-      image.data[index + 2] = value * 0.96;
-      image.data[index + 3] = 255;
-    }
-  }
-  context.putImageData(image, 0, 0);
-  const texture = new CanvasTexture(canvas);
-  texture.wrapS = RepeatWrapping;
-  texture.wrapT = RepeatWrapping;
-  texture.colorSpace = SRGBColorSpace;
-  texture.anisotropy = 4;
-  return texture;
-}
-
 function tileKey(segment: number, side: TerrainSide): string {
   return `${segment}:${side}`;
 }
@@ -166,7 +136,7 @@ export class TerrainSystem {
 
     this.material = new MeshStandardMaterial({
       color: 0xffffff,
-      map: createTerrainTexture(),
+      map: getTerrainTexture(),
       vertexColors: true,
       roughness: 0.96,
       metalness: 0,
