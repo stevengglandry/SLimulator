@@ -17,6 +17,7 @@ import { VehiclePhysics } from "../physics/vehiclePhysics";
 import { AtmosphereSystem } from "./atmosphere";
 import { RoadRibbonSystem } from "./roadRibbons";
 import { ScenerySystem } from "./scenerySystem";
+import { TerrainSystem } from "./terrainSystem";
 import { VehicleVisual } from "./vehicleVisual";
 
 export function renderPixelRatio(mode: RenderQuality, devicePixelRatio: number): number {
@@ -30,6 +31,7 @@ export class WorldRenderer {
   readonly camera: PerspectiveCamera;
 
   private readonly atmosphere: AtmosphereSystem;
+  private readonly terrain: TerrainSystem;
   private readonly roadRibbons: RoadRibbonSystem;
   private readonly scenery: ScenerySystem;
   private readonly vehicleVisual: VehicleVisual;
@@ -62,6 +64,7 @@ export class WorldRenderer {
     this.atmosphere = new AtmosphereSystem(this.scene, this.road, this.renderer);
 
     this.addLights();
+    this.terrain = new TerrainSystem(this.scene, this.road);
     this.roadRibbons = new RoadRibbonSystem(this.scene, this.road);
     this.scenery = new ScenerySystem(this.scene, this.road);
     this.vehicleVisual = new VehicleVisual(this.scene, this.physics);
@@ -87,6 +90,7 @@ export class WorldRenderer {
     this.qualityMode = mode;
     this.renderer.setPixelRatio(renderPixelRatio(mode, window.devicePixelRatio || 1));
     this.renderer.shadowMap.enabled = false;
+    this.terrain.setQualityMode(mode);
     this.roadRibbons.setQualityMode(mode);
     this.scenery.setQualityMode(mode);
     this.atmosphere.setQualityMode(mode);
@@ -106,6 +110,7 @@ export class WorldRenderer {
   render(snapshot: SimSnapshot, now: number, perf?: PerfRecorder): void {
     const timeSeconds = now * 0.001;
     this.measure(perf, "atmosphere", () => this.atmosphere.update(snapshot, timeSeconds));
+    this.measure(perf, "terrain", () => this.terrain.update(snapshot));
     this.measure(perf, "road", () => this.roadRibbons.update(snapshot));
     this.measure(perf, "scenery", () => this.scenery.update(snapshot, timeSeconds));
     this.measure(perf, "vehicle", () => this.vehicleVisual.update(snapshot, timeSeconds));

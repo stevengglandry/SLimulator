@@ -4,6 +4,7 @@ export type PerfStage =
   | "physics"
   | "render"
   | "atmosphere"
+  | "terrain"
   | "road"
   | "scenery"
   | "vehicle"
