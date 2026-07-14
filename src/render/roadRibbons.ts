@@ -129,6 +129,8 @@ export class RoadRibbonSystem {
   setQualityMode(mode: RenderQuality): void {
     if (this.qualityMode === mode) return;
     this.qualityMode = mode;
+    this.ribbons.vergeL.mesh.visible = mode === "high";
+    this.ribbons.vergeR.mesh.visible = mode === "high";
     this.lastUpdateKey = "";
   }
 
@@ -161,6 +163,8 @@ export class RoadRibbonSystem {
     this.updateRibbon(this.ribbons.road, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge, (s) => boundsAt(s).rightEdge, 0.02);
     this.updateRibbon(this.ribbons.shoulderL, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge - config.shoulderWidth, (s) => boundsAt(s).leftEdge, 0.012);
     this.updateRibbon(this.ribbons.shoulderR, samples, settings.sampleCount, (s) => boundsAt(s).rightEdge, (s) => boundsAt(s).rightEdge + config.shoulderWidth, 0.012);
+    this.updateRibbon(this.ribbons.vergeL, samples, settings.sampleCount, (s) => boundsAt(s).leftWall + 0.18, (s) => boundsAt(s).leftEdge - config.shoulderWidth, 0);
+    this.updateRibbon(this.ribbons.vergeR, samples, settings.sampleCount, (s) => boundsAt(s).rightEdge + config.shoulderWidth, (s) => boundsAt(s).rightWall - 0.18, 0);
 
     this.updateRibbon(this.ribbons.roadSheen, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge + 0.08, (s) => boundsAt(s).rightEdge - 0.08, 0.043);
     this.updateRibbon(this.ribbons.shoulderGlowL, samples, settings.sampleCount, (s) => boundsAt(s).leftEdge - 0.24, (s) => boundsAt(s).leftEdge + 0.08, 0.062);
@@ -268,6 +272,8 @@ export class RoadRibbonSystem {
       road: this.createRibbon(sampleCount, roadMaterial, "road"),
       shoulderL: this.createRibbon(sampleCount, shoulderMaterial, "shoulderL"),
       shoulderR: this.createRibbon(sampleCount, shoulderMaterial, "shoulderR"),
+      vergeL: this.createRibbon(sampleCount, grassMaterial, "vergeL"),
+      vergeR: this.createRibbon(sampleCount, grassMaterial, "vergeR"),
       roadSheen: this.createRibbon(sampleCount, roadSheen, "roadSheen"),
       shoulderGlowL: this.createRibbon(sampleCount, shoulderGlow, "shoulderGlowL"),
       shoulderGlowR: this.createRibbon(sampleCount, shoulderGlow, "shoulderGlowR"),

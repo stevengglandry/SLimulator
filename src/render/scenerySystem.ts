@@ -202,7 +202,6 @@ export class ScenerySystem {
   private readonly trafficLights: InstancedMesh;
   private readonly utilityPoles: InstancedMesh;
   private readonly utilityCrossbars: InstancedMesh;
-  private readonly utilityWires: InstancedMesh;
   private readonly streetlightCones: InstancedMesh;
   private readonly crosswalkPaint: CrosswalkPaint;
   private readonly crosswalkLampPosts: InstancedMesh;
@@ -246,7 +245,6 @@ export class ScenerySystem {
     this.trafficLights = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x102a2e, emissive: new Color(0x5def9a).multiplyScalar(4.2), emissiveIntensity: 1.0 }), 90, false);
     this.utilityPoles = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x20393d }), 180, true);
     this.utilityCrossbars = this.createInstanced(unitBox, new MeshLambertMaterial({ color: 0x1d3438 }), 300, true);
-    this.utilityWires = this.createInstanced(unitBox, new MeshBasicMaterial({ color: 0x0c2025, transparent: true, opacity: 0.72 }), 420, false);
 
     const streetlightConeGeom = new ConeGeometry(2.2, 5.8, 8, 1, true);
     streetlightConeGeom.translate(0, -2.9, 0);
@@ -308,7 +306,6 @@ export class ScenerySystem {
     let light = 0;
     let utilityPole = 0;
     let utilityCrossbar = 0;
-    let utilityWire = 0;
     let streetlightCone = 0;
     let cross = 0;
     let crosswalkLampPost = 0;
@@ -326,15 +323,17 @@ export class ScenerySystem {
       const s = anchor * 18;
       const sceneryScene = this.road.scenerySceneAt(s);
       const sceneConfig = SCENES[sceneryScene];
-      const city = sceneConfig.city;
-      const forest = sceneConfig.forest;
-      const crosswalkPresence = sceneConfig.crosswalks;
-      const trafficLightPresence = sceneConfig.trafficLights;
-      const buildingScale = sceneConfig.buildingScale;
-      const safetyMargin = sceneConfig.buildingSetback;
-      const skylineDensity = sceneConfig.skylineDensity;
-      const buildingDensity = sceneConfig.buildings * settings.density;
-      const treeDensity = sceneConfig.trees * (this.qualityMode === "high" ? 1 : 0.48);
+      const highTransitionValue = (key: keyof Omit<(typeof SCENES)[SceneKey], "label">): number =>
+        this.qualityMode === "high" ? this.road.roadValueAt(key, s) : sceneConfig[key];
+      const city = highTransitionValue("city");
+      const forest = highTransitionValue("forest");
+      const crosswalkPresence = highTransitionValue("crosswalks");
+      const trafficLightPresence = highTransitionValue("trafficLights");
+      const buildingScale = highTransitionValue("buildingScale");
+      const safetyMargin = highTransitionValue("buildingSetback");
+      const skylineDensity = highTransitionValue("skylineDensity");
+      const buildingDensity = highTransitionValue("buildings") * settings.density;
+      const treeDensity = highTransitionValue("trees") * (this.qualityMode === "high" ? 1 : 0.48);
       const activeBuildingScale = buildingScale;
       const activeUrbanScale = skylineDensity * 1.45;
       const activeUrban = skylineDensity > 0.01;
@@ -465,18 +464,6 @@ export class ScenerySystem {
             const crown = this.road.worldFromRoad(s + 3, lateral, 7.68);
             setInstance(this.utilityCrossbars, utilityCrossbar++, crown.x, crown.y, crown.z, 0.09, 0.09, 2.7, rot + Math.PI / 2);
           }
-          if (this.qualityMode === "high" && s >= baseS + 28) {
-            for (const wireOffset of [-1.35, -0.45, 0.45, 1.35]) {
-              if (utilityWire >= this.capacity(this.utilityWires)) break;
-              const wirePoint = this.road.worldFromRoad(s + 58, lateral + wireOffset, 7.74 + Math.abs(wireOffset) * 0.04);
-              setInstance(this.utilityWires, utilityWire++, wirePoint.x, wirePoint.y, wirePoint.z, 0.016, 0.016, 46, rot);
-            }
-          }
-          if (this.qualityMode === "high" && streetlightCone < this.capacity(this.streetlightCones)) {
-            const offset = lateral < 0 ? 1.7 : -1.7;
-            const lightPoint = this.road.worldFromRoad(s + 3, lateral + offset, 6.9);
-            setInstance(this.streetlightCones, streetlightCone++, lightPoint.x, lightPoint.y, lightPoint.z, 1.0, 1.0, 1.0, rot);
-          }
         }
       }
 
@@ -564,11 +551,11 @@ export class ScenerySystem {
         const s = anchor * urbanSpacing;
         const sceneryScene = this.road.scenerySceneAt(s);
         const sceneConfig = SCENES[sceneryScene];
-        const skylineDensity = sceneConfig.skylineDensity;
+        const skylineDensity = this.qualityMode === "high" ? this.road.roadValueAt("skylineDensity", s) : sceneConfig.skylineDensity;
         if (skylineDensity <= 0.01) continue;
         const activeUrbanScale = skylineDensity * 1.45;
         if ((activeUrbanScale > 1.1 && urbanSpacing !== 42) || (activeUrbanScale <= 1.1 && urbanSpacing !== 56)) continue;
-        const safetyMargin = sceneConfig.buildingSetback;
+        const safetyMargin = this.qualityMode === "high" ? this.road.roadValueAt("buildingSetback", s) : sceneConfig.buildingSetback;
         const seedOffset = (this.road.seed + sceneSeedShift(sceneryScene)) % 10000;
         const bounds = this.road.boundsAt(s);
         const frame = this.road.frameAt(s);
@@ -612,7 +599,6 @@ export class ScenerySystem {
       [this.trafficLights, light],
       [this.utilityPoles, utilityPole],
       [this.utilityCrossbars, utilityCrossbar],
-      [this.utilityWires, utilityWire],
       [this.streetlightCones, streetlightCone],
       [this.crosswalkLampPosts, crosswalkLampPost],
       [this.crosswalkLampHeads, crosswalkLampHead],

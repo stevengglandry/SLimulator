@@ -1,6 +1,7 @@
 import {
   BufferAttribute,
   BufferGeometry,
+  BackSide,
   Color,
   DodecahedronGeometry,
   DoubleSide,
@@ -15,6 +16,8 @@ import {
   PlaneGeometry,
   Quaternion,
   Scene,
+  ShaderMaterial,
+  SphereGeometry,
   Vector3,
   WebGLRenderer
 } from "three";
@@ -33,12 +36,23 @@ type CloudBase = {
   puffs: Matrix4[];
 };
 
+export function atmosphereFogRange(mode: RenderQuality, forest: number, urban: number): { near: number; far: number } {
+  if (mode === "perf") {
+    if (urban > 0.75) return { near: 72, far: 470 };
+    return { near: lerp(62, 42, forest), far: lerp(390, 260, forest) };
+  }
+  if (urban > 0.75) return { near: 82, far: 455 };
+  return { near: lerp(82, 48, forest), far: lerp(430, 245, forest) };
+}
+
 export class AtmosphereSystem {
   private readonly sky = new Mesh(new PlaneGeometry(4000, 1600), new MeshBasicMaterial({ color: 0x82a9b5, depthWrite: false }));
+  private readonly highSky: Mesh<SphereGeometry, ShaderMaterial>;
   private readonly mountainFar: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly mountainNear: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly lowFogBand: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private readonly clouds: InstancedMesh;
+  private readonly cloudMaterial: MeshStandardMaterial;
   private readonly cloudBases: CloudBase[] = [];
   private readonly fogColor = new Color();
   private readonly ruralFogColor = new Color(0x6f9ca9);
@@ -63,6 +77,9 @@ export class AtmosphereSystem {
     this.sky.rotation.x = -Math.PI / 2.7;
     this.scene.add(this.sky);
 
+    this.highSky = this.createHighQualitySky();
+    this.sky.visible = false;
+
     this.mountainFar = this.createMountainRidge(0x356f79, 0.36, 31);
     this.mountainNear = this.createMountainRidge(0x285c66, 0.44, 83);
     this.lowFogBand = new Mesh(
@@ -74,7 +91,7 @@ export class AtmosphereSystem {
 
     // Generative clouds
     const cloudGeo = new DodecahedronGeometry(1, 1);
-    const cloudMaterial = new MeshStandardMaterial({
+    this.cloudMaterial = new MeshStandardMaterial({
       color: 0xf6f4ed,
       roughness: 1,
       metalness: 0,
@@ -145,7 +162,7 @@ export class AtmosphereSystem {
       this.cloudBases.push(base);
     }
     const totalPuffs = this.cloudBases.reduce((total, cloud) => total + cloud.puffs.length, 0);
-    this.clouds = new InstancedMesh(cloudGeo, cloudMaterial, totalPuffs);
+    this.clouds = new InstancedMesh(cloudGeo, this.cloudMaterial, totalPuffs);
     this.clouds.instanceMatrix.setUsage(DynamicDrawUsage);
     this.clouds.frustumCulled = false;
     this.scene.add(this.clouds);
@@ -153,6 +170,12 @@ export class AtmosphereSystem {
 
   setQualityMode(mode: RenderQuality): void {
     this.qualityMode = mode;
+    const highQuality = mode === "high";
+    this.sky.visible = !highQuality;
+    this.highSky.visible = highQuality;
+    this.cloudMaterial.flatShading = !highQuality;
+    this.cloudMaterial.color.set(highQuality ? 0xe8eeeb : 0xf6f4ed);
+    this.cloudMaterial.needsUpdate = true;
   }
 
   update(snapshot: SimSnapshot, nowSeconds = 0): void {
@@ -169,21 +192,32 @@ export class AtmosphereSystem {
     if (this.scene.background instanceof Color) this.scene.background.copy(fogColor);
     const fog = this.scene.fog;
     if (fog instanceof Fog) {
-      fog.color.copy(fogColor);
-      fog.near = lerp(62, 42, forest);
-      fog.far = lerp(390, 260, forest);
-      if (urban > 0.75) {
-        fog.near = 72;
-        fog.far = 470;
+      const range = atmosphereFogRange(this.qualityMode, forest, urban);
+      if (highQuality) {
+        fog.color.copy(fogColor).lerp(new Color(0xb7c8c7), 0.18);
+      } else {
+        fog.color.copy(fogColor);
       }
+      fog.near = range.near;
+      fog.far = range.far;
     }
 
     this.sky.material.color.copy(fogColor);
-    this.renderer.toneMappingExposure = lerp(1.2, 1.06, forest) + urban * 0.05;
+    this.renderer.toneMappingExposure = highQuality
+      ? lerp(1.12, 1.02, forest) + urban * 0.035
+      : lerp(1.2, 1.06, forest) + urban * 0.05;
+
+    if (highQuality) {
+      const uniforms = this.highSky.material.uniforms;
+      (uniforms.horizonColor.value as Color).copy(fogColor).lerp(new Color(0xc4d0cc), 0.72);
+      (uniforms.zenithColor.value as Color).copy(fogColor).lerp(new Color(0x76a8bc), 0.72);
+      (uniforms.hazeColor.value as Color).copy(fogColor).lerp(new Color(0xd4d5c8), 0.7);
+    }
 
     // Move the instanced cloud field with the camera. One instanced draw replaces
     // hundreds of individual puff meshes while preserving the same silhouettes.
     this.sky.position.set(pose.x, 420, pose.z - 900);
+    this.highSky.position.set(pose.x, pose.y, pose.z);
     let cloudInstance = 0;
     for (let index = 0; index < this.cloudBases.length; index++) {
       if (!highQuality && index % 3 !== 0) continue;
@@ -211,10 +245,65 @@ export class AtmosphereSystem {
     this.mountainFar.visible = forest > 0.08;
     this.mountainNear.visible = forest > 0.08;
 
-    const fogPoint = this.road.worldFromRoad(pose.s + 260, 0, 28);
+    const fogPoint = this.road.worldFromRoad(pose.s + (highQuality ? 315 : 260), 0, highQuality ? 34 : 28);
     this.lowFogBand.position.set(fogPoint.x, fogPoint.y, fogPoint.z);
-    this.lowFogBand.material.opacity = lerp(0.04, 0.2, forest);
-    this.lowFogBand.visible = forest > 0.08;
+    if (highQuality) {
+      this.lowFogBand.visible = false;
+    } else {
+      this.lowFogBand.material.color.set(0xb6c8c5);
+      this.lowFogBand.material.opacity = lerp(0.04, 0.2, forest);
+      this.lowFogBand.visible = forest > 0.08;
+    }
+  }
+
+  private createHighQualitySky(): Mesh<SphereGeometry, ShaderMaterial> {
+    const material = new ShaderMaterial({
+      side: BackSide,
+      depthTest: false,
+      depthWrite: false,
+      fog: false,
+      uniforms: {
+        horizonColor: { value: new Color(0xb9cac7) },
+        zenithColor: { value: new Color(0x719fb2) },
+        hazeColor: { value: new Color(0xd4d3c4) },
+        sunColor: { value: new Color(0xffe5b0) },
+        sunDirection: { value: new Vector3(-90, 115, -55).normalize() }
+      },
+      vertexShader: `
+        varying vec3 vWorldDirection;
+        void main() {
+          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+          vWorldDirection = normalize(worldPosition.xyz - cameraPosition);
+          gl_Position = projectionMatrix * viewMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 horizonColor;
+        uniform vec3 zenithColor;
+        uniform vec3 hazeColor;
+        uniform vec3 sunColor;
+        uniform vec3 sunDirection;
+        varying vec3 vWorldDirection;
+        void main() {
+          vec3 direction = normalize(vWorldDirection);
+          float elevation = clamp(direction.y, -0.08, 1.0);
+          float skyMix = smoothstep(-0.02, 0.72, elevation);
+          vec3 color = mix(horizonColor, zenithColor, skyMix);
+          float horizonHaze = exp(-max(0.0, elevation) * 8.5);
+          color = mix(color, hazeColor, horizonHaze * 0.34);
+          float sunAmount = max(dot(direction, sunDirection), 0.0);
+          float sunDisc = pow(sunAmount, 10000.0);
+          float sunGlow = pow(sunAmount, 58.0) * 0.085;
+          color += sunColor * (sunDisc * 0.95 + sunGlow);
+          gl_FragColor = vec4(color, 1.0);
+        }
+      `
+    });
+    const sky = new Mesh(new SphereGeometry(1050, 32, 18), material);
+    sky.frustumCulled = false;
+    sky.renderOrder = -10;
+    this.scene.add(sky);
+    return sky;
   }
 
   private createMountainRidge(color: number, opacity: number, seed: number): Mesh<BufferGeometry, MeshBasicMaterial> {

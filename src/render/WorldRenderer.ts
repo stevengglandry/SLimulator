@@ -19,6 +19,11 @@ import { RoadRibbonSystem } from "./roadRibbons";
 import { ScenerySystem } from "./scenerySystem";
 import { VehicleVisual } from "./vehicleVisual";
 
+export function renderPixelRatio(mode: RenderQuality, devicePixelRatio: number): number {
+  if (mode === "perf") return 1;
+  return Math.min(1.7, Math.max(1.2, devicePixelRatio || 1));
+}
+
 export class WorldRenderer {
   readonly renderer: WebGLRenderer;
   readonly scene: Scene;
@@ -44,7 +49,7 @@ export class WorldRenderer {
     // High mode gets additional resolution and scene detail. Both quality modes
     // render through the same direct path so thin road markings stay consistent.
     this.renderer = new WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.7));
+    this.renderer.setPixelRatio(renderPixelRatio("high", window.devicePixelRatio || 1));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.16;
@@ -80,7 +85,7 @@ export class WorldRenderer {
 
   setQualityMode(mode: RenderQuality): void {
     this.qualityMode = mode;
-    this.renderer.setPixelRatio(mode === "high" ? Math.min(window.devicePixelRatio || 1, 1.7) : 1);
+    this.renderer.setPixelRatio(renderPixelRatio(mode, window.devicePixelRatio || 1));
     this.renderer.shadowMap.enabled = false;
     this.roadRibbons.setQualityMode(mode);
     this.scenery.setQualityMode(mode);
