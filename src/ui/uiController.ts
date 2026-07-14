@@ -242,8 +242,24 @@ export function createUi(root: HTMLElement, actions: UiActions): UiController {
   let lastFpsUpdateMs = -Infinity;
   let lastGamepadUpdateMs = -Infinity;
 
-  must("modToggle").addEventListener("click", () => panel.classList.toggle("open"));
-  must("closePanel").addEventListener("click", () => panel.classList.remove("open"));
+  const anchorOverlayViewport = () => {
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    window.scrollTo(0, 0);
+  };
+  const closeModeratorPanel = () => {
+    panel.classList.remove("open");
+    (document.activeElement as HTMLElement | null)?.blur();
+    canvas.focus({ preventScroll: true });
+    anchorOverlayViewport();
+    requestAnimationFrame(anchorOverlayViewport);
+  };
+
+  must("modToggle").addEventListener("click", () => {
+    if (panel.classList.contains("open")) closeModeratorPanel();
+    else panel.classList.add("open");
+  });
+  must("closePanel").addEventListener("click", closeModeratorPanel);
   must("cockpitToggle").addEventListener("click", () => cockpit.classList.toggle("minimized"));
   must("wheelAcc").addEventListener("click", () => actions.onToggleACC());
   must("wheelLca").addEventListener("click", () => actions.onToggleLCA());
