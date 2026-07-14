@@ -132,10 +132,9 @@ export class RoadRibbonSystem {
   setQualityMode(mode: RenderQuality): void {
     if (this.qualityMode === mode) return;
     this.qualityMode = mode;
-    const grassMaterial = mode === "perf" ? this.grassMaterials.perf : this.grassMaterials.high;
-    this.ribbons.ground.mesh.material = grassMaterial;
-    this.ribbons.vergeL.mesh.material = grassMaterial;
-    this.ribbons.vergeR.mesh.material = grassMaterial;
+    this.ribbons.ground.mesh.material = mode === "perf" ? this.grassMaterials.perf : this.grassMaterials.high;
+    this.ribbons.vergeL.mesh.material = this.grassMaterials.perf;
+    this.ribbons.vergeR.mesh.material = this.grassMaterials.perf;
     this.ribbons.vergeL.mesh.visible = mode === "high";
     this.ribbons.vergeR.mesh.visible = mode === "high";
     this.lastUpdateKey = "";
@@ -288,8 +287,8 @@ export class RoadRibbonSystem {
       road: this.createRibbon(sampleCount, roadMaterial, "road"),
       shoulderL: this.createRibbon(sampleCount, shoulderMaterial, "shoulderL"),
       shoulderR: this.createRibbon(sampleCount, shoulderMaterial, "shoulderR"),
-      vergeL: this.createRibbon(sampleCount, highGrassMaterial, "vergeL"),
-      vergeR: this.createRibbon(sampleCount, highGrassMaterial, "vergeR"),
+      vergeL: this.createRibbon(sampleCount, perfGrassMaterial, "vergeL"),
+      vergeR: this.createRibbon(sampleCount, perfGrassMaterial, "vergeR"),
       roadSheen: this.createRibbon(sampleCount, roadSheen, "roadSheen"),
       shoulderGlowL: this.createRibbon(sampleCount, shoulderGlow, "shoulderGlowL"),
       shoulderGlowR: this.createRibbon(sampleCount, shoulderGlow, "shoulderGlowR"),
